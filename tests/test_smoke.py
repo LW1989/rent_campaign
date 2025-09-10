@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.functions import (
     load_geojson_folder, get_rent_campaign_df, 
-    calc_total, get_heating_type, get_energy_type, get_renter_share
+    calc_total, get_heating_type, get_energy_type, get_renter_share,
+    gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe
 )
 
 
@@ -200,6 +201,161 @@ class TestSmokePipeline(unittest.TestCase):
         self.assertGreater(len(result), 0)  # Should have some results
         self.assertTrue(hasattr(result, 'geometry'))
         self.assertEqual(result.crs, self.renter_data.crs)
+
+    def test_gitter_id_to_polygon(self):
+        """Test GITTER_ID_100m to polygon conversion."""
+        # Test valid GITTER_ID
+        gitter_id = "CRS3035RES100mN2691700E4341100"
+        polygon = gitter_id_to_polygon(gitter_id)
+        
+        self.assertIsNotNone(polygon)
+        self.assertIsInstance(polygon, Polygon)
+        
+        # Check that it's a 100m x 100m square
+        bounds = polygon.bounds
+        width = bounds[2] - bounds[0]  # max_x - min_x
+        height = bounds[3] - bounds[1]  # max_y - min_y
+        self.assertEqual(width, 100)
+        self.assertEqual(height, 100)
+        
+        # Test invalid GITTER_ID
+        invalid_id = "invalid_format"
+        result = gitter_id_to_polygon(invalid_id)
+        self.assertIsNone(result)
+
+    def test_convert_to_float(self):
+        """Test German decimal format conversion."""
+        test_df = pd.DataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'value1': ['1,5', '2,3'],  # German decimal format
+            'value2': ['10,25', '20,75'],
+            'text_col': ['text1', 'text2']
+        })
+        
+        result = convert_to_float(test_df)
+        
+        # Check that decimal conversion worked
+        self.assertEqual(result['value1'].iloc[0], 1.5)
+        self.assertEqual(result['value1'].iloc[1], 2.3)
+        self.assertEqual(result['value2'].iloc[0], 10.25)
+        self.assertEqual(result['value2'].iloc[1], 20.75)
+        
+        # Check that GITTER_ID column remained unchanged
+        self.assertEqual(result['GITTER_ID_100m'].iloc[0], 'CRS3035RES100mN2691700E4341100')
+        
+        # Check that text columns were converted to numeric (should be NaN, then filled with 0)
+        self.assertEqual(result['text_col'].iloc[0], 0)
+
+    def test_drop_cols(self):
+        """Test column dropping functionality."""
+        test_df = pd.DataFrame({
+            'keep1': [1, 2, 3],
+            'keep2': [4, 5, 6],
+            'drop1': [7, 8, 9],
+            'drop2': [10, 11, 12],
+            'nonexistent': [13, 14, 15]  # This column won't exist
+        })
+        
+        # Drop some columns including one that doesn't exist
+        result = drop_cols(test_df, ['drop1', 'drop2', 'nonexistent_col'])
+        
+        # Check that correct columns remain
+        expected_cols = ['keep1', 'keep2', 'nonexistent']
+        self.assertEqual(list(result.columns), expected_cols)
+        self.assertEqual(len(result), 3)
+
+    def test_create_geodataframe(self):
+        """Test creation of GeoDataFrame from GITTER_ID."""
+        test_df = pd.DataFrame({
+            'GITTER_ID_100m': [
+                'CRS3035RES100mN2691700E4341100',
+                'CRS3035RES100mN2691800E4341200',
+                'invalid_format'  # This should be filtered out
+            ],
+            'value': [1, 2, 3]
+        })
+        
+        result = create_geodataframe(test_df)
+        
+        # Should be a GeoDataFrame
+        self.assertIsInstance(result, gpd.GeoDataFrame)
+        
+        # Should have filtered out invalid GITTER_ID
+        self.assertEqual(len(result), 2)
+        
+        # Should have proper CRS
+        self.assertEqual(result.crs, "EPSG:3035")
+        
+        # Should have geometry column
+        self.assertTrue('geometry' in result.columns)
+        self.assertTrue(all(isinstance(geom, Polygon) for geom in result.geometry))
+
+
+class TestPreprocessingIntegration(unittest.TestCase):
+    """Integration tests for preprocessing pipeline."""
+    
+    def setUp(self):
+        """Set up test fixtures for preprocessing tests."""
+        self.temp_dir = tempfile.mkdtemp()
+        
+        # Create test CSV content
+        self.test_csv_content = """GITTER_ID_100m;x_mp_100m;y_mp_100m;werterlaeuternde_Zeichen;value1;value2
+CRS3035RES100mN2691700E4341100;4341150;2691750;-;1,5;10,25
+CRS3035RES100mN2691800E4341200;4341250;2691850;-;2,3;20,75
+CRS3035RES100mN2691900E4341300;4341350;2691950;-;3,1;30,50"""
+        
+        # Write test CSV file
+        self.test_csv_path = Path(self.temp_dir) / "test_data.csv"
+        with open(self.test_csv_path, 'w', encoding='utf-8') as f:
+            f.write(self.test_csv_content)
+    
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+    
+    def test_preprocessing_workflow(self):
+        """Test the complete preprocessing workflow with test data."""
+        from src.functions import import_dfs, process_df
+        
+        # Test import_dfs
+        df_dict = import_dfs(self.temp_dir, ";")
+        
+        self.assertEqual(len(df_dict), 1)
+        self.assertIn('test_data', df_dict)
+        
+        test_df = df_dict['test_data']
+        self.assertEqual(len(test_df), 3)
+        self.assertIn('GITTER_ID_100m', test_df.columns)
+        
+        # Test full process_df workflow
+        result_dict = process_df(
+            path=self.temp_dir,
+            sep=";",
+            cols_to_drop=["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen"],
+            on_col="GITTER_ID_100m",
+            drop_how="any",
+            how="inner",
+            gitter_id_column="GITTER_ID_100m"
+        )
+        
+        self.assertEqual(len(result_dict), 1)
+        result_gdf = result_dict['test_data']
+        
+        # Should be a GeoDataFrame
+        self.assertIsInstance(result_gdf, gpd.GeoDataFrame)
+        
+        # Should have converted values correctly
+        self.assertEqual(result_gdf['value1'].iloc[0], 1.5)
+        self.assertEqual(result_gdf['value2'].iloc[0], 10.25)
+        
+        # Should have proper geometry
+        self.assertTrue(all(isinstance(geom, Polygon) for geom in result_gdf.geometry))
+        
+        # Should have dropped specified columns
+        dropped_cols = ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen", "GITTER_ID_100m"]
+        for col in dropped_cols:
+            self.assertNotIn(col, result_gdf.columns)
 
 
 if __name__ == '__main__':

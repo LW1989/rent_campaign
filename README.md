@@ -52,14 +52,45 @@ rent_campaign/
    ```
 
 3. **Prepare your data:**
-   - Place census GeoJSON files in a folder (default: `data/rent_campagne/`)
-   - Place district boundaries in another folder (default: `data/all_stimmbezirke/`)
+
+   **Option A: Use preprocessed GeoJSON files (recommended)**
+   - Place census GeoJSON files in `data/rent_campagne/`
+   - Place district boundaries in `data/all_stimmbezirke/`
+   
+   **Option B: Start with raw Zensus 2022 CSV files**
+   - Place raw CSV files in `data/raw_csv/`
+   - Run preprocessing: `python scripts/preprocess.py`
+   - This will create GeoJSON files in the expected locations
 
 ## Usage
 
-### Basic Usage
+### Data Preprocessing (if using raw CSV files)
 
-Run the pipeline with default parameters:
+If you have raw Zensus 2022 CSV files, run the preprocessing pipeline first:
+
+```bash
+# Basic preprocessing with defaults
+python scripts/preprocess.py
+
+# Custom input/output paths
+python scripts/preprocess.py \
+  --input-path /path/to/csv/files \
+  --output-path /path/to/processed/geojson
+
+# Different output format
+python scripts/preprocess.py --output-format gpkg
+```
+
+**What the preprocessing does:**
+- Converts CSV files to GeoDataFrames with 100m×100m grid polygons
+- Handles German decimal format (comma → period conversion)
+- Drops unnecessary columns (coordinates, explanatory text)
+- Creates proper geometries from `GITTER_ID_100m` grid identifiers
+- Saves as GeoJSON files ready for the main pipeline
+
+### Main Analysis Pipeline
+
+Run the main analysis pipeline:
 
 ```bash
 python scripts/pipeline.py

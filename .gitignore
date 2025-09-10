@@ -150,6 +150,9 @@ data/.DS_Store
 data/*/.DS_Store
 data/*/Icon*
 
+# Raw CSV files - ignore actual data but keep structure
+data/raw_csv/*.csv
+
 # Output directories - ignore all generated files but allow documentation
 output/*/*.geojson
 output/*/*.json

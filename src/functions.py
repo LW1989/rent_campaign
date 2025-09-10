@@ -824,3 +824,147 @@ def save_all_to_geojson(
         except Exception as e:
             logger.error(f"Error exporting {key} to {out_path}: {e}")
             continue
+
+
+def import_dfs(path, sep):
+    df_dict={}
+    for file in os.listdir(path):
+
+        if file.endswith(".csv"):
+            df=pd.read_csv(os.path.join(path, file), sep=sep)
+            df_dict[file.split(".")[0]]=df
+    return df_dict
+
+def drop_cols(df, cols):
+    df_copy=df.copy()
+    existing_cols=[col for col in cols if col in df_copy.columns]
+    df_copy=df_copy.drop(columns=existing_cols, axis=1)
+    return df_copy
+
+
+def convert_to_float(df):
+    df_copy=df.copy()
+    string_columns = df_copy.select_dtypes(include=['object']).columns.tolist()
+    for cols in string_columns:
+        if cols != "GITTER_ID_100m":
+            df_copy[cols]=df_copy[cols].str.replace(",", ".")
+            df_copy[cols] = pd.to_numeric(df_copy[cols], errors='coerce')
+    #df_copy=df_copy.str.replace(",", ".").astype(float)
+    df_copy=df_copy.fillna(0)
+    return df_copy
+
+def create_geodataframe(df, gitter_id_column='GITTER_ID_100m'):
+    """
+    Convert pandas DataFrame to GeoDataFrame using GITTER_ID_100m column
+    """
+    # Create geometry column
+    geometries = df[gitter_id_column].apply(gitter_id_to_polygon)
+    
+    # Remove rows where geometry creation failed
+    valid_mask = geometries.notna()
+    df_valid = df[valid_mask].copy()
+    geometries_valid = geometries[valid_mask]
+    
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(df_valid, geometry=geometries_valid, crs="EPSG:3035")
+    
+    return gdf
+
+
+def process_df(path, sep, cols_to_drop, on_col, drop_how, how, gitter_id_column):
+    logger.info("Starting process_df")
+    logger.debug(f"Parameters received - path: {path}, sep: {sep}, cols_to_drop: {cols_to_drop}, "
+                 f"on_col: {on_col}, drop_how: {drop_how}, how: {how}, gitter_id_column: {gitter_id_column}")
+
+    df_dict = import_dfs(path, sep)
+    logger.info(f"{len(df_dict)} dataframes imported from {path}")
+
+    total = len(df_dict)
+
+    for idx, (key, df) in enumerate(df_dict.items(), start=1):
+        logger.debug(f"Processing dataframe {idx}/{total} – '{key}'")
+
+        # clean it
+        
+        df = drop_cols(df, cols_to_drop)
+        df = convert_to_float(df)
+        df = create_geodataframe(df, gitter_id_column)
+        df = drop_cols(df, ["GITTER_ID_100m"])
+
+        # write the cleaned frame back into the dict
+        df_dict[key] = df
+
+    # merged_df = merge_dfs(df_list, on_col, how)
+    # logger.info("DataFrames merged successfully")
+
+    # merged_df = drop_na(merged_df, drop_how)
+    # logger.info("Missing values dropped")
+
+    # merged_df = create_geodataframe(merged_df, gitter_id_column)
+    # logger.info("GeoDataFrame created")
+
+    logger.success("process_df completed successfully")
+    return df_dict
+
+import geopandas as gpd
+import os
+
+def save_geodataframes(gdf_dict, output_dir='output', file_format='gpkg'):
+    """
+    Saves all GeoDataFrames in a dictionary to disk using their keys as filenames.
+
+    Parameters:
+    - gdf_dict (dict): Dictionary where each value is a GeoDataFrame.
+    - output_dir (str): Directory where the files will be saved.
+    - file_format (str): File format to save the GeoDataFrames. Default is 'gpkg'.
+
+    Supported formats include: 'gpkg', 'shp', 'geojson', etc.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    for key, gdf in gdf_dict.items():
+        if not isinstance(gdf, gpd.GeoDataFrame):
+            print(f"Skipping key '{key}': Not a GeoDataFrame.")
+            continue
+
+        filename = f"{key}.{file_format}"
+        filepath = os.path.join(output_dir, filename)
+        
+        try:
+            gdf.to_file(filepath, driver=_get_driver(file_format))
+            print(f"Saved: {filepath}")
+        except Exception as e:
+            print(f"Error saving '{key}': {e}")
+
+def _get_driver(file_format):
+    """Maps file formats to appropriate GeoPandas drivers."""
+    format_driver_map = {
+        'gpkg': 'GPKG',
+        'shp': 'ESRI Shapefile',
+        'geojson': 'GeoJSON'
+    }
+    return format_driver_map.get(file_format.lower(), 'GPKG')
+
+def gitter_id_to_polygon(gitter_id):
+    """
+    Convert GITTER_ID_100m to a polygon geometry.
+    Format: CRS3035RES100mN2691700E4341100
+    """
+    # Extract coordinates using regex
+    match = re.match(r'CRS3035RES100mN(\d+)E(\d+)', gitter_id)
+    if match:
+        north = int(match.group(1))
+        east = int(match.group(2))
+        
+        # Create 100m x 100m square polygon
+        # The coordinates are the southwest corner of the grid cell
+        polygon = Polygon([
+            (east, north),           # SW
+            (east + 100, north),     # SE
+            (east + 100, north + 100), # NE
+            (east, north + 100),     # NW
+            (east, north)            # Close the polygon
+        ])
+        return polygon
+    else:
+        return None

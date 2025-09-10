@@ -45,3 +45,13 @@ OVERPASS_CONFIG = {
     "timeout": 180,
     "retries": 4
 }
+
+# Preprocessing configuration
+PREPROCESS_PARAMS = {
+    "input_path": "/Users/lutz/Documents/red_data/Zenus_2022/input_data",
+    "output_path": "/Users/lutz/Documents/red_data/Zenus_2022/pre_proc_data",
+    "csv_separator": ";",
+    "columns_to_drop": ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen"],
+    "gitter_id_column": "GITTER_ID_100m",
+    "output_format": "geojson"
+}
