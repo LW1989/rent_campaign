@@ -65,29 +65,32 @@ Run the pipeline with default parameters:
 python scripts/pipeline.py
 ```
 
-### Custom Parameters
+### Custom File Paths
 
-Override configuration via command line arguments:
+Override input and output paths via command line arguments:
 
 ```bash
 python scripts/pipeline.py \
   --input-folder /path/to/census/data \
   --bezirke-folder /path/to/districts \
   --output-squares output/squares/ \
-  --output-addresses output/addresses/ \
-  --log-level DEBUG
+  --output-addresses output/addresses/
 ```
 
-### Adjust Analysis Thresholds
+### Adjust Analysis Parameters
 
-Fine-tune the analysis criteria:
+To modify analysis thresholds, logging level, or other settings, edit the `params.py` file:
 
-```bash
-python scripts/pipeline.py \
-  --central-heating-threshold 0.7 \
-  --fossil-heating-threshold 0.6 \
-  --fernwaerme-threshold 0.1 \
-  --renter-threshold 0.65
+```python
+# Edit params.py
+THRESHOLD_PARAMS = {
+    "central_heating_thres": 0.7,    # Increase central heating threshold
+    "fossil_heating_thres": 0.5,     # Decrease fossil fuel threshold  
+    "fernwaerme_thres": 0.1,         # Lower district heating threshold
+    "renter_share": 0.65             # Adjust renter threshold
+}
+
+LOG_LEVEL = "DEBUG"  # Change logging verbosity
 ```
 
 ### View All Options

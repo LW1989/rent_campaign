@@ -46,7 +46,6 @@ def parse_args() -> argparse.Namespace:
 Examples:
   python scripts/pipeline.py
   python scripts/pipeline.py --input-folder /path/to/data --output-squares /path/to/squares/
-  python scripts/pipeline.py --log-level DEBUG
         """
     )
     
@@ -76,50 +75,6 @@ Examples:
         type=str,
         default=OUTPUT_PATH_ADDRESSES,
         help=f"Output path for addresses GeoJSON files (default: {OUTPUT_PATH_ADDRESSES})"
-    )
-    
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        default=LOG_LEVEL,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help=f"Logging level (default: {LOG_LEVEL})"
-    )
-    
-    parser.add_argument(
-        "--crs",
-        type=str,
-        default=CRS,
-        help=f"Coordinate Reference System (default: {CRS})"
-    )
-    
-    # Threshold parameters
-    parser.add_argument(
-        "--central-heating-threshold",
-        type=float,
-        default=THRESHOLD_PARAMS["central_heating_thres"],
-        help=f"Central heating threshold (default: {THRESHOLD_PARAMS['central_heating_thres']})"
-    )
-    
-    parser.add_argument(
-        "--fossil-heating-threshold", 
-        type=float,
-        default=THRESHOLD_PARAMS["fossil_heating_thres"],
-        help=f"Fossil heating threshold (default: {THRESHOLD_PARAMS['fossil_heating_thres']})"
-    )
-    
-    parser.add_argument(
-        "--fernwaerme-threshold",
-        type=float,
-        default=THRESHOLD_PARAMS["fernwaerme_thres"],
-        help=f"Fernwärme threshold (default: {THRESHOLD_PARAMS['fernwaerme_thres']})"
-    )
-    
-    parser.add_argument(
-        "--renter-threshold",
-        type=float,
-        default=THRESHOLD_PARAMS["renter_share"],
-        help=f"Renter share threshold (default: {THRESHOLD_PARAMS['renter_share']})"
     )
     
     return parser.parse_args()
@@ -241,35 +196,28 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
 def main() -> int:
     """Main pipeline execution."""
     try:
-        # Parse arguments
+        # Parse arguments (only paths)
         args = parse_args()
         
-        # Setup logging
-        setup_logging(args.log_level)
+        # Setup logging from params
+        setup_logging(LOG_LEVEL)
         logging.info("Starting rent campaign analysis pipeline")
         
-        # Build threshold dictionary from args
-        threshold_dict = {
-            "central_heating_thres": args.central_heating_threshold,
-            "fossil_heating_thres": args.fossil_heating_threshold,
-            "fernwaerme_thres": args.fernwaerme_threshold,
-            "renter_share": args.renter_threshold
-        }
-        
-        logging.info(f"Using thresholds: {threshold_dict}")
+        # Use threshold dictionary from params
+        logging.info(f"Using thresholds: {THRESHOLD_PARAMS}")
         
         # Load input data
         loading_dict = load_input_data(args.input_folder)
         
         # Load district data
-        bezirke_dict = load_district_data(args.bezirke_folder, args.crs)
+        bezirke_dict = load_district_data(args.bezirke_folder, CRS)
         
         # Extract required datasets
         renter_df, heating_type, energy_type = extract_datasets(loading_dict)
         
         # Compute rent campaign analysis
         rent_campaign_df = compute_rent_campaign_data(
-            heating_type, energy_type, renter_df, threshold_dict
+            heating_type, energy_type, renter_df, THRESHOLD_PARAMS
         )
         
         # Filter by districts
