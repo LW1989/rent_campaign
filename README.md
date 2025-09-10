@@ -60,7 +60,7 @@ rent_campaign/
    **Option B: Start with raw Zensus 2022 CSV files**
    - Place raw CSV files in `data/raw_csv/`
    - Run preprocessing: `python scripts/preprocess.py`
-   - This will create GeoJSON files in the expected locations
+   - This will create GeoJSON files directly in `data/rent_campagne/`
 
 ## Usage
 
@@ -69,7 +69,7 @@ rent_campaign/
 If you have raw Zensus 2022 CSV files, run the preprocessing pipeline first:
 
 ```bash
-# Basic preprocessing with defaults
+# Basic preprocessing (data/raw_csv → data/rent_campagne)
 python scripts/preprocess.py
 
 # Custom input/output paths

@@ -48,8 +48,8 @@ OVERPASS_CONFIG = {
 
 # Preprocessing configuration
 PREPROCESS_PARAMS = {
-    "input_path": "/Users/lutz/Documents/red_data/Zenus_2022/input_data",
-    "output_path": "/Users/lutz/Documents/red_data/Zenus_2022/pre_proc_data",
+    "input_path": "data/raw_csv",
+    "output_path": "data/rent_campagne",
     "csv_separator": ";",
     "columns_to_drop": ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen"],
     "gitter_id_column": "GITTER_ID_100m",
