@@ -136,9 +136,28 @@ cython_debug/
 #.idea/
 
 # Project-specific ignores
-# Data directories
-data/
-output/
+# Data directories - ignore data files but allow documentation
+data/*/*.geojson
+data/*/*.json
+data/*/*.csv
+data/*/*.parquet
+data/*/*.shp
+data/*/*.dbf
+data/*/*.shx
+data/*/*.prj
+data/*/*.cpg
+data/.DS_Store
+data/*/.DS_Store
+data/*/Icon*
+
+# Output directories - ignore all generated files but allow documentation
+output/*/*.geojson
+output/*/*.json
+output/*/*.csv
+output/*/*.parquet
+output/.DS_Store
+output/*/.DS_Store
+output/*/Icon*
 
 # Log files
 *.log
