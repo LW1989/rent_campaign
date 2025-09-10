@@ -88,6 +88,33 @@ python scripts/preprocess.py --output-format gpkg
 - Creates proper geometries from `GITTER_ID_100m` grid identifiers
 - Saves as GeoJSON files ready for the main pipeline
 
+### Wucher Miete (Rent Gouging) Detection
+
+Detect potential rent gouging by identifying spatial outliers in rent data:
+
+```bash
+# Basic detection on preprocessed rent data
+python scripts/detect_wucher.py \
+  --input data/rent_campagne/Durchschnittliche_Nettokaltmiete_und_Anzahl_der_Wohnungen_100m-Gitter.geojson
+
+# Customize detection parameters
+python scripts/detect_wucher.py \
+  --input rent_data.geojson \
+  --output wucher_results.geojson \
+  --threshold 2.0 \
+  --method median \
+  --neighborhood-size 5 \
+  --min-rent-threshold 3.0
+```
+
+**What the wucher detection does:**
+- Uses spatial neighborhood analysis to identify rent outliers
+- Compares each grid cell's rent to its local neighbors (3×3, 5×5, or 7×7 neighborhood)
+- Flags cells with rents significantly above neighborhood median/mean
+- Configurable sensitivity via threshold parameter (lower = more sensitive)
+- Outputs GeoJSON file with detected outlier locations and statistics
+- Filters out low/invalid rents to focus on genuine outliers
+
 ### Main Analysis Pipeline
 
 Run the main analysis pipeline:
