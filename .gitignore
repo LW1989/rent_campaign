@@ -185,3 +185,6 @@ Thumbs.db
 *~
 *.bak
 *.backup
+
+# Additional Icon files
+Icon*
