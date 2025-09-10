@@ -37,7 +37,8 @@ SPATIAL_PARAMS = {
 DATASET_NAMES = {
     "renter": "Zensus2022_Eigentuemerquote_100m-Gitter",
     "heating_type": "Zensus2022_Gebaeude_mit_Wohnraum_nach_ueberwiegender_Heizungsart_100m-Gitter",
-    "energy_type": "Zensus2022_Gebaeude_mit_Wohnraum_nach_Energietraeger_der_Heizung_100m-Gitter"
+    "energy_type": "Zensus2022_Gebaeude_mit_Wohnraum_nach_Energietraeger_der_Heizung_100m-Gitter",
+    "rent": "Durchschnittliche_Nettokaltmiete_und_Anzahl_der_Wohnungen_100m-Gitter"
 }
 
 # Overpass API configuration
@@ -54,4 +55,14 @@ PREPROCESS_PARAMS = {
     "columns_to_drop": ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen"],
     "gitter_id_column": "GITTER_ID_100m",
     "output_format": "geojson"
+}
+
+# Wucher Miete (rent gouging) detection parameters
+WUCHER_DETECTION_PARAMS = {
+    "method": "median",          # 'mean' or 'median' for neighbor statistic
+    "threshold": 2.5,            # Number of standard deviations above neighbor median/mean
+    "neighborhood_size": 5,      # Size of neighborhood (must be odd: 3, 5, 7, etc.)
+    "min_rent_threshold": 3.0,   # Minimum rent per sqm to consider (filter out very low rents)
+    "min_neighbors": 3,          # Minimum number of neighbors required for comparison
+    "rent_column": "durchschnMieteQM"  # Column name for rent per square meter
 }

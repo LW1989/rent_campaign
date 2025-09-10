@@ -37,6 +37,8 @@ from sklearn.preprocessing import MinMaxScaler
 
 from typing import Dict, Iterable, Tuple, Literal, List, Optional, Union
 from pathlib import Path
+import xarray as xr
+from scipy.ndimage import generic_filter
 
 def load_geojson_folder(folder_path: Union[str, Path]) -> Dict[str, gpd.GeoDataFrame]:
     """
@@ -968,3 +970,393 @@ def gitter_id_to_polygon(gitter_id):
         return polygon
     else:
         return None
+
+
+# =============================================================================
+# WUCHER MIETE (RENT GOUGING) DETECTION FUNCTIONS
+# =============================================================================
+
+def detect_neighbor_outliers(da: xr.DataArray, method: str = 'median', threshold: float = 3.0, size: int = 3) -> xr.DataArray:
+    """
+    Identify strong outliers relative to neighboring pixels using a customizable neighborhood.
+    
+    This function detects rent gouging by comparing each grid cell's rent to its spatial neighbors.
+    A cell is flagged as an outlier if its rent is significantly higher than the local neighborhood.
+    
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D DataArray with rent values (floats) and NaNs for missing data.
+    method : str, default 'median'
+        Statistical method to compute neighbor central tendency: 'mean' or 'median'.
+        'median' is more robust to outliers in the neighborhood.
+    threshold : float, default 3.0
+        Number of standard deviations above neighbor mean/median to flag as outlier.
+        Lower values are more sensitive (detect more outliers).
+    size : int, default 3
+        Size of the square neighborhood (must be odd, e.g., 3, 5, 7).
+        Larger sizes consider more distant neighbors.
+        
+    Returns
+    -------
+    xr.DataArray
+        Boolean DataArray: True = potential rent gouging, False = normal rent.
+        Same coordinates and dimensions as input.
+        
+    Raises
+    ------
+    ValueError
+        If da is not 2D, size is not odd, or method is not 'mean'/'median'.
+        
+    Examples
+    --------
+    >>> rent_array = xr.DataArray([[5, 6, 15], [7, 8, 6], [5, 7, 6]])
+    >>> outliers = detect_neighbor_outliers(rent_array, threshold=2.0, size=3)
+    >>> outliers.values
+    array([[False, False,  True],
+           [False, False, False], 
+           [False, False, False]])
+    """
+    if da.ndim != 2:
+        raise ValueError("detect_neighbor_outliers only works on 2D DataArrays")
+    if size % 2 == 0:
+        raise ValueError("size must be an odd integer")
+    if method not in ['mean', 'median']:
+        raise ValueError("method must be 'mean' or 'median'")
+    
+    center_index = (size * size) // 2
+    
+    # Create a closure that captures the method and threshold parameters
+    def make_outlier_checker(method_param, threshold_param, center_idx):
+        def check_outlier(window):
+            """Check if center pixel is an outlier relative to neighbors."""
+            center = window[center_idx]
+            neighbors = np.delete(window, center_idx)
+            neighbors = neighbors[~np.isnan(neighbors)]
+            
+            # Skip if center is NaN or no valid neighbors
+            if np.isnan(center) or len(neighbors) == 0:
+                return False
+                
+            # Compute neighbor statistic and variability
+            if method_param == 'mean':
+                stat = np.mean(neighbors)
+                std = np.std(neighbors)
+            elif method_param == 'median':
+                stat = np.median(neighbors)
+                std = np.std(neighbors)
+            else:
+                return False  # This shouldn't happen due to validation above
+            
+            # Flag as outlier if significantly above neighbors
+            # Only flag high outliers (potential rent gouging), not low outliers
+            return (center - stat) > threshold_param * std
+        return check_outlier
+    
+    # Create the outlier checker with captured parameters
+    outlier_checker = make_outlier_checker(method, threshold, center_index)
+    
+    # Apply the outlier check to every pixel using a sliding window
+    outlier_mask = generic_filter(
+        da.values,
+        function=outlier_checker,
+        size=size,
+        mode='constant',
+        cval=np.nan
+    )
+    
+    # Ensure boolean dtype
+    outlier_mask = outlier_mask.astype(bool)
+    
+    return xr.DataArray(outlier_mask, coords=da.coords, dims=da.dims, name='wucher_miete_outlier')
+
+
+def gdf_to_xarray(gdf: gpd.GeoDataFrame, value_col: str, grid_size: int = 100) -> xr.DataArray:
+    """
+    Convert GeoDataFrame with regular 100m grid to xarray DataArray.
+    
+    This function assumes the input GeoDataFrame represents a regular grid where each
+    geometry is a 100m x 100m square. It extracts the grid coordinates and creates
+    a 2D array suitable for spatial analysis.
+    
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame with regular grid geometries and a value column.
+        Geometries should be 100m x 100m squares in EPSG:3035.
+    value_col : str
+        Name of the column containing values to convert to array.
+    grid_size : int, default 100
+        Size of each grid cell in meters (should be 100 for Zensus data).
+        
+    Returns
+    -------
+    xr.DataArray
+        2D DataArray with spatial coordinates and values.
+        NaN values indicate missing data.
+        
+    Raises
+    ------
+    ValueError
+        If gdf is empty, value_col doesn't exist, or CRS is not EPSG:3035.
+        
+    Examples
+    --------
+    >>> # Create sample grid GeoDataFrame
+    >>> gdf = create_sample_grid()
+    >>> da = gdf_to_xarray(gdf, 'rent_per_sqm')
+    >>> da.shape
+    (50, 100)  # Example dimensions
+    """
+    if gdf.empty:
+        raise ValueError("GeoDataFrame is empty")
+    if value_col not in gdf.columns:
+        raise ValueError(f"Column '{value_col}' not found in GeoDataFrame")
+    if gdf.crs != "EPSG:3035":
+        logger.warning(f"Expected EPSG:3035, got {gdf.crs}. Reprojecting...")
+        gdf = gdf.to_crs("EPSG:3035")
+    
+    # Extract grid coordinates from geometry centroids
+    centroids = gdf.geometry.centroid
+    x_coords = centroids.x.values
+    y_coords = centroids.y.values
+    
+    # Determine grid bounds and create regular grid
+    x_min, x_max = x_coords.min(), x_coords.max()
+    y_min, y_max = y_coords.min(), y_coords.max()
+    
+    # Create coordinate arrays (aligned to grid centers)
+    x_range = np.arange(x_min, x_max + grid_size, grid_size)
+    y_range = np.arange(y_min, y_max + grid_size, grid_size)
+    
+    # Initialize array with NaN
+    data_array = np.full((len(y_range), len(x_range)), np.nan)
+    
+    # Fill array with values at correct positions
+    for idx, (x, y, val) in enumerate(zip(x_coords, y_coords, gdf[value_col])):
+        # Find nearest grid indices
+        x_idx = np.argmin(np.abs(x_range - x))
+        y_idx = np.argmin(np.abs(y_range - y))
+        
+        # Only assign if position is close enough (within half grid size)
+        if (abs(x_range[x_idx] - x) <= grid_size/2 and 
+            abs(y_range[y_idx] - y) <= grid_size/2):
+            data_array[y_idx, x_idx] = val
+    
+    # Create xarray DataArray with proper coordinates
+    da = xr.DataArray(
+        data_array,
+        coords={'y': y_range, 'x': x_range},
+        dims=['y', 'x'],
+        name=value_col,
+        attrs={
+            'grid_size': grid_size,
+            'crs': 'EPSG:3035',
+            'units': 'EUR/sqm' if 'rent' in value_col.lower() else 'unknown'
+        }
+    )
+    
+    return da
+
+
+def xarray_to_gdf(da: xr.DataArray, template_gdf: gpd.GeoDataFrame, result_col: str = 'outlier') -> gpd.GeoDataFrame:
+    """
+    Convert xarray DataArray results back to GeoDataFrame format.
+    
+    This function maps the 2D array results back to the original GeoDataFrame
+    geometries, preserving spatial relationships and allowing integration with
+    other geospatial data.
+    
+    Parameters
+    ----------
+    da : xr.DataArray
+        2D DataArray with analysis results (e.g., outlier detection).
+    template_gdf : gpd.GeoDataFrame
+        Original GeoDataFrame used as template for geometries and structure.
+        Must have the same spatial extent as the DataArray.
+    result_col : str, default 'outlier'
+        Name for the column containing the DataArray values.
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with original geometries and new result column.
+        Rows with NaN results are excluded.
+        
+    Raises
+    ------
+    ValueError
+        If template_gdf is empty or dimensions don't match expectations.
+        
+    Examples
+    --------
+    >>> outliers_da = detect_neighbor_outliers(rent_array)
+    >>> result_gdf = xarray_to_gdf(outliers_da, original_gdf, 'wucher_miete')
+    >>> result_gdf['wucher_miete'].sum()  # Count outliers
+    42
+    """
+    if template_gdf.empty:
+        raise ValueError("Template GeoDataFrame is empty")
+    
+    # Extract coordinates and values from DataArray
+    x_coords = da.coords['x'].values
+    y_coords = da.coords['y'].values
+    grid_size = da.attrs.get('grid_size', 100)
+    
+    # Get template centroids for mapping
+    template_centroids = template_gdf.geometry.centroid
+    template_x = template_centroids.x.values
+    template_y = template_centroids.y.values
+    
+    # Create result column with default values
+    result_values = []
+    valid_indices = []
+    
+    for idx, (x, y) in enumerate(zip(template_x, template_y)):
+        # Find nearest grid position in DataArray
+        x_idx = np.argmin(np.abs(x_coords - x))
+        y_idx = np.argmin(np.abs(y_coords - y))
+        
+        # Check if position is within reasonable distance
+        if (abs(x_coords[x_idx] - x) <= grid_size/2 and 
+            abs(y_coords[y_idx] - y) <= grid_size/2):
+            
+            value = da.values[y_idx, x_idx]
+            if not np.isnan(value):
+                result_values.append(value)
+                valid_indices.append(idx)
+    
+    # Create result GeoDataFrame with only valid results
+    if valid_indices:
+        result_gdf = template_gdf.iloc[valid_indices].copy()
+        result_gdf[result_col] = result_values
+        result_gdf = result_gdf.reset_index(drop=True)
+    else:
+        # Return empty GeoDataFrame with correct structure
+        result_gdf = template_gdf.iloc[0:0].copy()
+        result_gdf[result_col] = pd.Series([], dtype=da.dtype)
+    
+    return result_gdf
+
+
+def detect_wucher_miete(
+    rent_gdf: gpd.GeoDataFrame, 
+    rent_column: str = 'durchschnMieteQM',
+    method: str = 'median',
+    threshold: float = 2.5,
+    neighborhood_size: int = 5,
+    min_rent_threshold: float = 3.0,
+    min_neighbors: int = 3
+) -> gpd.GeoDataFrame:
+    """
+    Detect potential rent gouging (Wucher Miete) in spatial rent data.
+    
+    This function identifies grid cells where rent is significantly higher than
+    the local neighborhood, which may indicate rent gouging. It uses spatial
+    outlier detection on a regular grid to find anomalous rent prices.
+    
+    Parameters
+    ----------
+    rent_gdf : gpd.GeoDataFrame
+        GeoDataFrame with rent data on regular 100m grid.
+        Must have geometries and rent column.
+    rent_column : str, default 'durchschnMieteQM'
+        Name of column containing rent per square meter values.
+    method : str, default 'median'
+        Statistical method for neighbor comparison: 'mean' or 'median'.
+    threshold : float, default 2.5
+        Number of standard deviations above neighbors to flag as outlier.
+    neighborhood_size : int, default 5
+        Size of neighborhood for comparison (must be odd: 3, 5, 7).
+    min_rent_threshold : float, default 3.0
+        Minimum rent per sqm to consider (filters out very low/invalid rents).
+    min_neighbors : int, default 3
+        Minimum number of neighbors required for valid comparison.
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with original data plus 'wucher_miete_flag' column.
+        True values indicate potential rent gouging.
+        Only includes cells with valid outlier analysis.
+        
+    Raises
+    ------
+    ValueError
+        If rent_gdf is empty, rent_col doesn't exist, or parameters are invalid.
+        
+    Examples
+    --------
+    >>> rent_data = load_rent_data()
+    >>> wucher_results = detect_wucher_miete(
+    ...     rent_data, 
+    ...     threshold=2.0,
+    ...     neighborhood_size=7
+    ... )
+    >>> print(f"Found {wucher_results['wucher_miete_flag'].sum()} potential cases")
+    Found 1247 potential cases
+    
+    Notes
+    -----
+    This function performs the following steps:
+    1. Filters rent data to remove invalid/low values
+    2. Converts GeoDataFrame to regular grid array
+    3. Applies spatial outlier detection
+    4. Converts results back to GeoDataFrame format
+    5. Returns only cells flagged as outliers
+    """
+    if rent_gdf.empty:
+        raise ValueError("Rent GeoDataFrame is empty")
+    if rent_column not in rent_gdf.columns:
+        raise ValueError(f"Rent column '{rent_column}' not found in GeoDataFrame")
+    if neighborhood_size % 2 == 0:
+        raise ValueError("neighborhood_size must be odd")
+    if threshold <= 0:
+        raise ValueError("threshold must be positive")
+    
+    logger.info(f"Starting Wucher Miete detection on {len(rent_gdf):,} grid cells")
+    
+    # Filter valid rent data
+    valid_rent_mask = (
+        rent_gdf[rent_column].notna() & 
+        (rent_gdf[rent_column] >= min_rent_threshold)
+    )
+    filtered_gdf = rent_gdf[valid_rent_mask].copy()
+    
+    if filtered_gdf.empty:
+        logger.warning("No valid rent data after filtering")
+        empty_result = rent_gdf.iloc[0:0].copy()
+        empty_result['wucher_miete_flag'] = pd.Series([], dtype=bool)
+        return empty_result
+    
+    logger.info(f"Analyzing {len(filtered_gdf):,} cells with valid rent data (≥{min_rent_threshold} EUR/sqm)")
+    
+    # Convert to xarray for grid analysis
+    logger.debug("Converting GeoDataFrame to xarray grid")
+    rent_array = gdf_to_xarray(filtered_gdf, rent_column)
+    logger.debug(f"Created {rent_array.shape} grid array")
+    
+    # Detect outliers
+    logger.debug(f"Running outlier detection (method={method}, threshold={threshold}, size={neighborhood_size})")
+    outliers = detect_neighbor_outliers(
+        rent_array, 
+        method=method,
+        threshold=threshold,
+        size=neighborhood_size
+    )
+    
+    # Convert back to GeoDataFrame
+    logger.debug("Converting outlier results back to GeoDataFrame")
+    result_gdf = xarray_to_gdf(outliers, filtered_gdf, 'wucher_miete_flag')
+    
+    # Filter to only return flagged outliers
+    wucher_cases = result_gdf[result_gdf['wucher_miete_flag'] == True].copy()
+    
+    logger.info(f"Detected {len(wucher_cases):,} potential Wucher Miete cases")
+    
+    if len(wucher_cases) > 0:
+        rent_stats = wucher_cases[rent_column].describe()
+        logger.info(f"Outlier rent stats: mean={rent_stats['mean']:.2f}, "
+                   f"median={rent_stats['50%']:.2f}, max={rent_stats['max']:.2f} EUR/sqm")
+    
+    return wucher_cases

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import numpy as np
+import xarray as xr
 from shapely.geometry import Point, Polygon
 
 # Add project root to path
@@ -21,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.functions import (
     load_geojson_folder, get_rent_campaign_df, 
     calc_total, get_heating_type, get_energy_type, get_renter_share,
-    gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe
+    gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe,
+    detect_neighbor_outliers, gdf_to_xarray, xarray_to_gdf, detect_wucher_miete
 )
 
 
@@ -356,6 +359,266 @@ CRS3035RES100mN2691900E4341300;4341350;2691950;-;3,1;30,50"""
         dropped_cols = ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen", "GITTER_ID_100m"]
         for col in dropped_cols:
             self.assertNotIn(col, result_gdf.columns)
+
+
+class TestWucherDetection(unittest.TestCase):
+    """Tests for Wucher Miete (rent gouging) detection functions."""
+    
+    def setUp(self):
+        """Set up test fixtures for wucher detection tests."""
+        # Create a simple 5x5 grid with known outliers
+        self.grid_size = 5
+        self.rent_values = np.array([
+            [8, 8, 8, 8, 8],      # Normal rents around 8 EUR/sqm
+            [8, 8, 20, 8, 8],     # One outlier: 20 EUR/sqm
+            [8, 8, 8, 8, 8],      # Normal rents
+            [8, 25, 8, 8, 8],     # Another outlier: 25 EUR/sqm  
+            [8, 8, 8, 8, 8]       # Normal rents
+        ])
+        
+        # Create grid geometries (100m x 100m squares)
+        geometries = []
+        rent_flat = []
+        for i in range(self.grid_size):
+            for j in range(self.grid_size):
+                # Create 100m x 100m squares
+                x_min = j * 100
+                y_min = i * 100
+                x_max = x_min + 100
+                y_max = y_min + 100
+                
+                polygon = Polygon([
+                    (x_min, y_min), (x_max, y_min), 
+                    (x_max, y_max), (x_min, y_max)
+                ])
+                geometries.append(polygon)
+                rent_flat.append(self.rent_values[i, j])
+        
+        # Create test GeoDataFrame
+        self.test_gdf = gpd.GeoDataFrame({
+            'durchschnMieteQM': rent_flat,
+            'geometry': geometries
+        }, crs='EPSG:3035')
+        
+        # Create test xarray
+        self.test_xarray = xr.DataArray(
+            self.rent_values.astype(float),  # Ensure float type for NaN handling
+            coords={'y': range(5), 'x': range(5)},
+            dims=['y', 'x'],
+            name='rent'
+        )
+    
+    def test_detect_neighbor_outliers_basic(self):
+        """Test basic outlier detection with known data."""
+        outliers = detect_neighbor_outliers(
+            self.test_xarray, 
+            method='median', 
+            threshold=2.0, 
+            size=3
+        )
+        
+        # Should be boolean array
+        self.assertEqual(outliers.dtype, bool)
+        self.assertEqual(outliers.shape, (5, 5))
+        
+        # Should detect the outliers we placed
+        outlier_positions = [(1, 2), (3, 1)]  # (row, col) of our outliers
+        for row, col in outlier_positions:
+            self.assertTrue(outliers.values[row, col], 
+                          f"Failed to detect outlier at position ({row}, {col})")
+        
+        # Should not flag normal values as outliers
+        normal_positions = [(0, 0), (2, 2), (4, 4)]
+        for row, col in normal_positions:
+            self.assertFalse(outliers.values[row, col],
+                           f"Incorrectly flagged normal value at ({row}, {col}) as outlier")
+    
+    def test_detect_neighbor_outliers_parameters(self):
+        """Test outlier detection with different parameters."""
+        # Test with mean method
+        outliers_mean = detect_neighbor_outliers(
+            self.test_xarray, method='mean', threshold=2.0, size=3
+        )
+        self.assertEqual(outliers_mean.dtype, bool)
+        
+        # Test with different thresholds
+        outliers_strict = detect_neighbor_outliers(
+            self.test_xarray, threshold=5.0, size=3  # Very strict
+        )
+        outliers_loose = detect_neighbor_outliers(
+            self.test_xarray, threshold=1.0, size=3  # Very loose
+        )
+        
+        # Stricter threshold should find fewer outliers
+        self.assertLessEqual(outliers_strict.sum(), outliers_loose.sum())
+        
+        # Test with different neighborhood sizes
+        outliers_small = detect_neighbor_outliers(
+            self.test_xarray, size=3, threshold=2.0
+        )
+        outliers_large = detect_neighbor_outliers(
+            self.test_xarray, size=5, threshold=2.0
+        )
+        
+        self.assertEqual(outliers_small.shape, outliers_large.shape)
+    
+    def test_detect_neighbor_outliers_edge_cases(self):
+        """Test outlier detection edge cases."""
+        # Test with NaN values
+        test_array_nan = self.test_xarray.copy()
+        test_array_nan.values[0, 0] = np.nan
+        
+        outliers_nan = detect_neighbor_outliers(test_array_nan, threshold=2.0)
+        self.assertFalse(outliers_nan.values[0, 0])  # NaN should not be flagged
+        
+        # Test error cases
+        with self.assertRaises(ValueError):
+            detect_neighbor_outliers(self.test_xarray, size=2)  # Even size
+        
+        with self.assertRaises(ValueError):
+            detect_neighbor_outliers(self.test_xarray, method='invalid')  # Invalid method
+        
+        # Test with 1D array (should fail)
+        array_1d = xr.DataArray([1, 2, 3, 4, 5])
+        with self.assertRaises(ValueError):
+            detect_neighbor_outliers(array_1d)
+    
+    def test_gdf_to_xarray_conversion(self):
+        """Test GeoDataFrame to xarray conversion."""
+        result_xarray = gdf_to_xarray(self.test_gdf, 'durchschnMieteQM')
+        
+        # Check basic properties
+        self.assertIsInstance(result_xarray, xr.DataArray)
+        self.assertEqual(result_xarray.name, 'durchschnMieteQM')
+        self.assertEqual(result_xarray.attrs['crs'], 'EPSG:3035')
+        self.assertEqual(result_xarray.attrs['grid_size'], 100)
+        
+        # Check that values are preserved (allowing for some spatial tolerance)
+        self.assertGreater(result_xarray.count(), 20)  # Should have most values
+        
+        # Check coordinate system
+        self.assertIn('x', result_xarray.coords)
+        self.assertIn('y', result_xarray.coords)
+    
+    def test_gdf_to_xarray_edge_cases(self):
+        """Test GeoDataFrame to xarray edge cases."""
+        # Test with empty GeoDataFrame
+        empty_gdf = self.test_gdf.iloc[0:0]
+        with self.assertRaises(ValueError):
+            gdf_to_xarray(empty_gdf, 'durchschnMieteQM')
+        
+        # Test with missing column
+        with self.assertRaises(ValueError):
+            gdf_to_xarray(self.test_gdf, 'nonexistent_column')
+        
+        # Test with wrong CRS (should work with warning)
+        gdf_wrong_crs = self.test_gdf.to_crs('EPSG:4326')
+        result = gdf_to_xarray(gdf_wrong_crs, 'durchschnMieteQM')
+        self.assertIsInstance(result, xr.DataArray)
+    
+    def test_xarray_to_gdf_conversion(self):
+        """Test xarray to GeoDataFrame conversion."""
+        # Create boolean outlier array
+        outlier_array = xr.DataArray(
+            np.array([[False, False, True], [False, True, False], [False, False, False]]),
+            coords={'y': [0, 100, 200], 'x': [0, 100, 200]},
+            dims=['y', 'x']
+        )
+        
+        # Create corresponding template GeoDataFrame
+        template_geometries = []
+        for y in [50, 150, 250]:  # Centroids
+            for x in [50, 150, 250]:
+                polygon = Polygon([
+                    (x-50, y-50), (x+50, y-50), 
+                    (x+50, y+50), (x-50, y+50)
+                ])
+                template_geometries.append(polygon)
+        
+        template_gdf = gpd.GeoDataFrame({
+            'dummy_col': range(9),
+            'geometry': template_geometries
+        }, crs='EPSG:3035')
+        
+        # Convert back
+        result_gdf = xarray_to_gdf(outlier_array, template_gdf, 'outlier_flag')
+        
+        # Check results
+        self.assertIsInstance(result_gdf, gpd.GeoDataFrame)
+        self.assertIn('outlier_flag', result_gdf.columns)
+        self.assertEqual(result_gdf['outlier_flag'].sum(), 2)  # Should have 2 True values
+    
+    def test_detect_wucher_miete_integration(self):
+        """Test the main wucher detection function."""
+        # Test with our synthetic data
+        wucher_results = detect_wucher_miete(
+            self.test_gdf,
+            rent_column='durchschnMieteQM',
+            threshold=1.5,  # Lower threshold to catch our test outliers
+            neighborhood_size=3,
+            min_rent_threshold=5.0  # Lower than our normal rents
+        )
+        
+        # Should detect outliers
+        self.assertIsInstance(wucher_results, gpd.GeoDataFrame)
+        self.assertIn('wucher_miete_flag', wucher_results.columns)
+        self.assertGreater(len(wucher_results), 0)  # Should find at least one outlier
+        self.assertTrue(all(wucher_results['wucher_miete_flag']))  # All results should be flagged
+        
+        # Check that detected outliers have high rents
+        detected_rents = wucher_results['durchschnMieteQM']
+        self.assertGreater(detected_rents.min(), 15)  # Should be higher than normal rents
+    
+    def test_detect_wucher_miete_edge_cases(self):
+        """Test wucher detection edge cases."""
+        # Test with empty GeoDataFrame
+        empty_gdf = self.test_gdf.iloc[0:0]
+        with self.assertRaises(ValueError):
+            detect_wucher_miete(empty_gdf)
+        
+        # Test with missing rent column
+        with self.assertRaises(ValueError):
+            detect_wucher_miete(self.test_gdf, rent_column='nonexistent')
+        
+        # Test with all rents below threshold
+        high_threshold_result = detect_wucher_miete(
+            self.test_gdf, 
+            min_rent_threshold=100.0  # Higher than any rent in our data
+        )
+        self.assertEqual(len(high_threshold_result), 0)  # Should return empty
+        
+        # Test with invalid parameters
+        with self.assertRaises(ValueError):
+            detect_wucher_miete(self.test_gdf, neighborhood_size=4)  # Even size
+        
+        with self.assertRaises(ValueError):
+            detect_wucher_miete(self.test_gdf, threshold=-1.0)  # Negative threshold
+    
+    def test_wucher_detection_parameters(self):
+        """Test wucher detection with different parameter combinations."""
+        # Test different methods
+        results_median = detect_wucher_miete(
+            self.test_gdf, method='median', threshold=1.5
+        )
+        results_mean = detect_wucher_miete(
+            self.test_gdf, method='mean', threshold=1.5
+        )
+        
+        # Both should find outliers
+        self.assertGreater(len(results_median), 0)
+        self.assertGreater(len(results_mean), 0)
+        
+        # Test different neighborhood sizes
+        results_small = detect_wucher_miete(
+            self.test_gdf, neighborhood_size=3, threshold=1.5
+        )
+        results_large = detect_wucher_miete(
+            self.test_gdf, neighborhood_size=5, threshold=1.5
+        )
+        
+        # Both should work
+        self.assertIsInstance(results_small, gpd.GeoDataFrame)
+        self.assertIsInstance(results_large, gpd.GeoDataFrame)
 
 
 if __name__ == '__main__':

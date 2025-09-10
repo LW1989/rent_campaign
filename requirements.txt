@@ -14,3 +14,7 @@ requests>=2.28.0
 
 # Logging
 loguru>=0.6.0
+
+# Array processing for outlier detection
+xarray>=2023.1.0
+scipy>=1.9.0
