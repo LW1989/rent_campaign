@@ -17,4 +17,14 @@ loguru>=0.6.0
 
 # Array processing for outlier detection
 xarray>=2023.1.0
-scipy>=1.9.0
+
+# Visualization for analysis
+contextily
+
+# Testing and development
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-xdist>=3.0.0
+pytest-mock>=3.10.0
+pytest-benchmark>=4.0.0
+hypothesis>=6.70.0

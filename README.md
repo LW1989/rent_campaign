@@ -24,7 +24,12 @@ rent_campaign/
 │   ├── __init__.py  
 │   └── pipeline.py       # Main pipeline script with CLI interface
 ├── tests/
-│   └── test_smoke.py     # Smoke tests for pipeline validation
+│   ├── unit/             # Unit tests for individual functions
+│   ├── integration/      # Integration tests for workflows
+│   ├── performance/      # Performance and memory tests
+│   ├── data/            # Test data and fixtures
+│   ├── utils/           # Test utilities and factories
+│   └── conftest.py      # Shared pytest fixtures
 ├── params.py             # Configuration constants and parameters
 ├── requirements.txt      # Python dependencies
 ├── README.md            # This file
@@ -35,7 +40,7 @@ rent_campaign/
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - pip or conda for package management
 
 ### Installation
@@ -270,6 +275,72 @@ For large datasets:
 - Consider processing districts individually
 - Adjust `min_overlap_ratio` in spatial parameters
 - Monitor memory usage during address extraction
+
+## Testing
+
+The project includes a comprehensive test suite with multiple test categories:
+
+### Test Categories
+
+- **Fast tests** (`pytest -m fast`): Unit tests that run in < 30 seconds
+- **Medium tests** (`pytest -m medium`): Integration tests that run in < 5 minutes  
+- **Slow tests** (`pytest -m slow`): End-to-end tests that run in < 30 minutes
+- **Performance tests** (`pytest -m performance`): Benchmarks and scaling tests
+- **Data quality tests** (`pytest -m data_quality`): Real data validation
+
+### Running Tests
+
+1. **Run all fast tests:**
+   ```bash
+   pytest -m fast
+   ```
+
+2. **Run with coverage:**
+   ```bash
+   pytest --cov=src --cov-report=html
+   ```
+
+3. **Run specific test file:**
+   ```bash
+   pytest tests/unit/test_core_functions.py -v
+   ```
+
+4. **Run parameterized tests:**
+   ```bash
+   pytest tests/unit/test_wucher_parameterized.py -v
+   ```
+
+5. **Validate test infrastructure:**
+   ```bash
+   python test_validation.py
+   ```
+
+### Test Structure
+
+```
+tests/
+├── unit/                 # Unit tests for individual functions
+│   ├── test_core_functions.py
+│   ├── test_wucher_detection.py
+│   └── test_wucher_parameterized.py
+├── integration/          # Integration and workflow tests
+│   ├── test_pipeline.py
+│   └── test_data_quality.py
+├── performance/          # Performance and memory tests
+│   ├── test_benchmarks.py
+│   └── test_memory.py
+├── utils/               # Test utilities and data factories
+│   └── factories.py
+└── conftest.py          # Shared fixtures and test configuration
+```
+
+### CI/CD
+
+The project includes GitHub Actions workflows for:
+
+- **Continuous Integration**: Runs on every push/PR with fast and integration tests
+- **Pull Request Validation**: Comprehensive validation for PRs including performance checks
+- **Nightly Tests**: Extended test suite including slow tests and memory leak detection
 
 ## License
 
