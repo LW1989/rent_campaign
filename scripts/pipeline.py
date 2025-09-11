@@ -16,11 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from params import (
     INPUT_FOLDER_PATH, BEZIRKE_FOLDER_PATH, OUTPUT_PATH_SQUARES, OUTPUT_PATH_ADDRESSES,
-    LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES
+    LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS
 )
 from src.functions import (
     load_geojson_folder, gdf_dict_to_crs, get_rent_campaign_df,
-    filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson
+    filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson,
+    detect_wucher_miete
 )
 
 
@@ -75,6 +76,19 @@ Examples:
         type=str,
         default=OUTPUT_PATH_ADDRESSES,
         help=f"Output path for addresses GeoJSON files (default: {OUTPUT_PATH_ADDRESSES})"
+    )
+    
+    parser.add_argument(
+        "--detect-wucher",
+        action="store_true",
+        help="Enable Wucher Miete (rent gouging) detection and save results"
+    )
+    
+    parser.add_argument(
+        "--wucher-output",
+        type=str,
+        default="output/wucher_miete/",
+        help="Output path for Wucher Miete detection results (default: output/wucher_miete/)"
     )
     
     return parser.parse_args()
@@ -193,6 +207,51 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
     logging.info(f"Results saved to {output_squares} and {output_addresses}")
 
 
+def run_wucher_detection(loading_dict: dict, output_path: str) -> None:
+    """Run Wucher Miete detection on rent data."""
+    logging.info("Starting Wucher Miete (rent gouging) detection...")
+    
+    # Look for rent data in the loaded datasets
+    rent_dataset_name = DATASET_NAMES.get("rent")
+    if not rent_dataset_name:
+        logging.warning("No rent dataset configured - skipping Wucher detection")
+        return
+    
+    if rent_dataset_name not in loading_dict:
+        logging.warning(f"Rent dataset '{rent_dataset_name}' not found in input data - skipping Wucher detection")
+        return
+    
+    rent_gdf = loading_dict[rent_dataset_name]
+    logging.info(f"Running Wucher detection on {len(rent_gdf):,} rent records")
+    
+    # Run detection with parameters from params.py
+    wucher_results = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
+    
+    if len(wucher_results) > 0:
+        # Create output directory
+        output_dir = Path(output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save results
+        output_file = output_dir / "wucher_miete_outliers.geojson"
+        logging.info(f"Saving {len(wucher_results):,} Wucher cases to: {output_file}")
+        wucher_results.to_file(output_file, driver='GeoJSON')
+        
+        # Log summary statistics
+        rent_col = WUCHER_DETECTION_PARAMS["rent_column"]
+        outlier_rents = wucher_results[rent_col]
+        logging.info(f"Wucher detection summary:")
+        logging.info(f"  Cases detected: {len(wucher_results):,}")
+        logging.info(f"  Rent range: {outlier_rents.min():.2f} - {outlier_rents.max():.2f} EUR/sqm")
+        logging.info(f"  Mean rent: {outlier_rents.mean():.2f} EUR/sqm")
+        logging.info(f"  Median rent: {outlier_rents.median():.2f} EUR/sqm")
+        
+    else:
+        logging.info("No Wucher cases detected with current parameters")
+    
+    logging.info("Wucher Miete detection completed")
+
+
 def main() -> int:
     """Main pipeline execution."""
     try:
@@ -231,6 +290,10 @@ def main() -> int:
             results_dict, addresses_results_dict,
             args.output_squares, args.output_addresses
         )
+        
+        # Optional: Wucher Miete detection
+        if args.detect_wucher:
+            run_wucher_detection(loading_dict, args.wucher_output)
         
         logging.info("Pipeline completed successfully")
         return 0
