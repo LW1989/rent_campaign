@@ -148,13 +148,17 @@ def main() -> int:
             logging.info(f"  Mean rent: {outlier_rents.mean():.2f} EUR/sqm")
             logging.info(f"  Median rent: {outlier_rents.median():.2f} EUR/sqm")
 
+            # Reproject to EPSG:4326 for uMap compatibility
+            logging.info("Reprojecting results to EPSG:4326 for uMap compatibility")
+            wucher_results_4326 = wucher_results.to_crs('EPSG:4326')
+
             # Prepare output directory
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Save results
             logging.info(f"Saving results to: {output_path}")
-            wucher_results.to_file(output_path, driver='GeoJSON')
+            wucher_results_4326.to_file(output_path, driver='GeoJSON')
             logging.info(f"✅ Results saved successfully")
 
             # Show sample locations

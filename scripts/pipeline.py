@@ -228,14 +228,18 @@ def run_wucher_detection(loading_dict: dict, output_path: str) -> None:
     wucher_results = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
     
     if len(wucher_results) > 0:
+        # Reproject to EPSG:4326 for uMap compatibility (same as squares/addresses)
+        logging.info("Reprojecting Wucher results to EPSG:4326 for uMap compatibility")
+        wucher_results_4326 = wucher_results.to_crs('EPSG:4326')
+        
         # Create output directory
         output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Save results
         output_file = output_dir / "wucher_miete_outliers.geojson"
-        logging.info(f"Saving {len(wucher_results):,} Wucher cases to: {output_file}")
-        wucher_results.to_file(output_file, driver='GeoJSON')
+        logging.info(f"Saving {len(wucher_results_4326):,} Wucher cases to: {output_file}")
+        wucher_results_4326.to_file(output_file, driver='GeoJSON')
         
         # Log summary statistics
         rent_col = WUCHER_DETECTION_PARAMS["rent_column"]
