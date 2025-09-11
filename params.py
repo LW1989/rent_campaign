@@ -60,9 +60,9 @@ PREPROCESS_PARAMS = {
 # Wucher Miete (rent gouging) detection parameters
 WUCHER_DETECTION_PARAMS = {
     "method": "median",          # 'mean' or 'median' for neighbor statistic
-    "threshold": 2.5,            # Number of standard deviations above neighbor median/mean
-    "neighborhood_size": 5,      # Size of neighborhood (must be odd: 3, 5, 7, etc.)
-    "min_rent_threshold": 3.0,   # Minimum rent per sqm to consider (filter out very low rents)
-    "min_neighbors": 3,          # Minimum number of neighbors required for comparison
+    "threshold": 3,            # Number of standard deviations above neighbor median/mean
+    "neighborhood_size": 11,      # Size of neighborhood (must be odd: 3, 5, 7, etc.)
+    "min_rent_threshold": 6.0,   # Minimum rent per sqm to consider (filter out very low rents)
+    "min_neighbors": 30,          # Minimum number of neighbors required for comparison
     "rent_column": "durchschnMieteQM"  # Column name for rent per square meter
 }
