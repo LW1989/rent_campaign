@@ -634,7 +634,67 @@ def gdf_dict_to_crs(d, crs):
     return out
 
 
-FlagCols = ("central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag")
+FlagCols = ("central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "wucher_miete_flag")
+
+
+def flags_to_key(row: pd.Series) -> str:
+    """
+    Generate a binary flag key from boolean flag columns.
+    
+    Creates a 4-character binary string representing the state of:
+    - central_heating_flag (position 0)
+    - fossil_heating_flag (position 1) 
+    - fernwaerme_flag (position 2)
+    - wucher_miete_flag (position 3)
+    
+    Parameters
+    ----------
+    row : pd.Series
+        Row containing boolean flag columns
+        
+    Returns
+    -------
+    str
+        4-character binary string like "1010" 
+    """
+    return (
+        f"{int(row['central_heating_flag'])}"
+        f"{int(row['fossil_heating_flag'])}"
+        f"{int(row['fernwaerme_flag'])}"
+        f"{int(row['wucher_miete_flag'])}"
+    )
+
+
+def add_conversation_starters(gdf: gpd.GeoDataFrame, conversation_starters: dict) -> gpd.GeoDataFrame:
+    """
+    Add conversation starter columns to GeoDataFrame based on flag combinations.
+    
+    Adds two new columns:
+    - flag_key: 4-character binary string representing flag states
+    - conversation_start: Mapped conversation starter text
+    
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame with boolean flag columns
+    conversation_starters : dict
+        Dictionary mapping flag keys to conversation starter texts
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with additional conversation starter columns
+    """
+    gdf = gdf.copy()
+    
+    # Generate flag keys
+    gdf["flag_key"] = gdf.apply(flags_to_key, axis=1)
+    
+    # Map conversation starters, with fallback for missing keys
+    default_starter = "Hallo, ich bin von der Linken. Wie geht es Ihnen mit den Wohn- und Nebenkosten?"
+    gdf["conversation_start"] = gdf["flag_key"].map(conversation_starters).fillna(default_starter)
+    
+    return gdf
 
 
 def _ensure_flags(gdf: gpd.GeoDataFrame, flag_cols: Iterable[str] = FlagCols) -> gpd.GeoDataFrame:
@@ -664,6 +724,7 @@ def add_umap_tooltip(gdf: gpd.GeoDataFrame, title_col: str = "district_name") ->
         + "<li>Fossil heating: "   + gdf["fossil_heating_flag"].map(yesno)   + "</li>"
         + "<li>Fernwärme: "        + gdf["fernwaerme_flag"].map(yesno)       + "</li>"
         + "<li>Renter: "           + gdf["renter_flag"].map(yesno)           + "</li>"
+        + "<li>Wucher Miete: "     + gdf["wucher_miete_flag"].map(yesno)     + "</li>"
         + "</ul>"
     )
     return gdf
@@ -678,6 +739,7 @@ def _make_desc(row: pd.Series) -> str:
         f"<li>Fossil heating: {yesno(row['fossil_heating_flag'])}</li>"
         f"<li>Fernwärme: {yesno(row['fernwaerme_flag'])}</li>"
         f"<li>Renter: {yesno(row['renter_flag'])}</li>"
+        f"<li>Wucher Miete: {yesno(row['wucher_miete_flag'])}</li>"
         "</ul>"
     )
 

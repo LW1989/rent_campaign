@@ -16,12 +16,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from params import (
     INPUT_FOLDER_PATH, BEZIRKE_FOLDER_PATH, OUTPUT_PATH_SQUARES, OUTPUT_PATH_ADDRESSES,
-    LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS
+    LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS,
+    CONVERSATION_STARTERS
 )
 from src.functions import (
     load_geojson_folder, gdf_dict_to_crs, get_rent_campaign_df,
     filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson,
-    detect_wucher_miete
+    detect_wucher_miete, add_conversation_starters
 )
 
 
@@ -78,18 +79,6 @@ Examples:
         help=f"Output path for addresses GeoJSON files (default: {OUTPUT_PATH_ADDRESSES})"
     )
     
-    parser.add_argument(
-        "--detect-wucher",
-        action="store_true",
-        help="Enable Wucher Miete (rent gouging) detection and save results"
-    )
-    
-    parser.add_argument(
-        "--wucher-output",
-        type=str,
-        default="output/wucher_miete/",
-        help="Output path for Wucher Miete detection results (default: output/wucher_miete/)"
-    )
     
     return parser.parse_args()
 
@@ -141,7 +130,7 @@ def extract_datasets(loading_dict: dict) -> tuple:
 
 
 def compute_rent_campaign_data(
-    heating_type, energy_type, renter_df, threshold_dict: dict
+    heating_type, energy_type, renter_df, threshold_dict: dict, loading_dict: dict = None
 ):
     """Compute rent campaign analysis data."""
     logging.info("Computing rent campaign analysis")
@@ -155,6 +144,109 @@ def compute_rent_campaign_data(
     
     logging.info(f"Rent campaign analysis complete. Result shape: {rent_campaign_df.shape}")
     return rent_campaign_df
+
+
+def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
+    """
+    Integrate Wucher Miete detection into rent campaign data.
+    
+    This function runs Wucher detection on rent data and performs a LEFT JOIN
+    with the rent campaign dataframe to preserve all squares while adding
+    wucher_miete_flag and rent information.
+    
+    Parameters
+    ----------
+    rent_campaign_df : gpd.GeoDataFrame
+        Main rent campaign analysis results with flags
+    loading_dict : dict
+        Dictionary containing all loaded datasets including rent data
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Enhanced rent campaign dataframe with wucher_miete_flag and durchschnMieteQM columns
+    """
+    logging.info("Integrating Wucher Miete detection into rent campaign data")
+    
+    # Get rent dataset name and check if available
+    rent_dataset_name = DATASET_NAMES.get("rent")
+    if not rent_dataset_name or rent_dataset_name not in loading_dict:
+        logging.warning(f"Rent dataset '{rent_dataset_name}' not found - adding default wucher_miete_flag=False")
+        rent_campaign_df['wucher_miete_flag'] = False
+        rent_campaign_df['durchschnMieteQM'] = None
+        return rent_campaign_df
+    
+    rent_gdf = loading_dict[rent_dataset_name]
+    logging.info(f"Running Wucher detection on {len(rent_gdf):,} rent records")
+    
+    # Run Wucher detection to get outliers
+    wucher_outliers = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
+    logging.info(f"Detected {len(wucher_outliers):,} Wucher Miete outliers")
+    
+    # Add wucher flag to outliers
+    if len(wucher_outliers) > 0:
+        wucher_outliers['wucher_miete_flag'] = True
+    
+    # Prepare rent data for joining (add rent column to all rent squares)
+    rent_col = WUCHER_DETECTION_PARAMS['rent_column']
+    rent_for_join = rent_gdf[[rent_col, 'geometry']].copy()
+    
+    # First: LEFT JOIN rent campaign with rent data to get rent values
+    logging.info("Joining rent campaign data with rent information")
+    # Use spatial join to match squares
+    campaign_with_rent = rent_campaign_df.sjoin(
+        rent_for_join, 
+        how='left', 
+        predicate='intersects'
+    )
+    
+    # Clean up join artifacts and handle duplicates
+    if 'index_right' in campaign_with_rent.columns:
+        campaign_with_rent = campaign_with_rent.drop('index_right', axis=1)
+    
+    # Remove duplicates keeping first match
+    campaign_with_rent = campaign_with_rent.drop_duplicates(subset=['geometry'])
+    
+    # Second: LEFT JOIN with Wucher outliers to add wucher flags
+    if len(wucher_outliers) > 0:
+        logging.info("Joining with Wucher Miete outliers")
+        # Prepare outliers for join (only need flag and geometry)
+        outliers_for_join = wucher_outliers[['wucher_miete_flag', 'geometry']].copy()
+        
+        # Spatial join with outliers
+        final_result = campaign_with_rent.sjoin(
+            outliers_for_join,
+            how='left',
+            predicate='intersects'
+        )
+        
+        # Clean up join artifacts
+        if 'index_right' in final_result.columns:
+            final_result = final_result.drop('index_right', axis=1)
+        
+        # Remove duplicates
+        final_result = final_result.drop_duplicates(subset=['geometry'])
+    else:
+        final_result = campaign_with_rent.copy()
+    
+    # Set default values for missing wucher flags
+    if 'wucher_miete_flag' not in final_result.columns:
+        final_result['wucher_miete_flag'] = False
+    else:
+        final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].fillna(False)
+    
+    # Ensure boolean type for flag
+    final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].astype(bool)
+    
+    # Clean up rent column if missing
+    if rent_col not in final_result.columns:
+        final_result[rent_col] = None
+    
+    logging.info(f"Integration complete. Final shape: {final_result.shape}")
+    logging.info(f"Wucher cases in final data: {final_result['wucher_miete_flag'].sum():,}")
+    logging.info(f"Squares with rent data: {final_result[rent_col].notna().sum():,}")
+    
+    return final_result
 
 
 def filter_by_districts(bezirke_dict: dict, rent_campaign_df):
@@ -190,14 +282,22 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
     Path(output_squares).mkdir(parents=True, exist_ok=True)
     Path(output_addresses).mkdir(parents=True, exist_ok=True)
     
-    # Save squares
+    # Add conversation starters to squares before saving
+    logging.info("Adding conversation starters to squares")
+    enhanced_results_dict = {}
+    for district_name, gdf in results_dict.items():
+        enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+        enhanced_results_dict[district_name] = enhanced_gdf
+        logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} squares")
+    
+    # Save enhanced squares
     save_all_to_geojson(
-        results_dict, 
+        enhanced_results_dict, 
         base_path=output_squares,
         kind="squares"
     )
     
-    # Save addresses  
+    # Save addresses (no conversation starters needed for addresses)
     save_all_to_geojson(
         addresses_results_dict,
         base_path=output_addresses,
@@ -207,53 +307,6 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
     logging.info(f"Results saved to {output_squares} and {output_addresses}")
 
 
-def run_wucher_detection(loading_dict: dict, output_path: str) -> None:
-    """Run Wucher Miete detection on rent data."""
-    logging.info("Starting Wucher Miete (rent gouging) detection...")
-    
-    # Look for rent data in the loaded datasets
-    rent_dataset_name = DATASET_NAMES.get("rent")
-    if not rent_dataset_name:
-        logging.warning("No rent dataset configured - skipping Wucher detection")
-        return
-    
-    if rent_dataset_name not in loading_dict:
-        logging.warning(f"Rent dataset '{rent_dataset_name}' not found in input data - skipping Wucher detection")
-        return
-    
-    rent_gdf = loading_dict[rent_dataset_name]
-    logging.info(f"Running Wucher detection on {len(rent_gdf):,} rent records")
-    
-    # Run detection with parameters from params.py
-    wucher_results = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
-    
-    if len(wucher_results) > 0:
-        # Reproject to EPSG:4326 for uMap compatibility (same as squares/addresses)
-        logging.info("Reprojecting Wucher results to EPSG:4326 for uMap compatibility")
-        wucher_results_4326 = wucher_results.to_crs('EPSG:4326')
-        
-        # Create output directory
-        output_dir = Path(output_path)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save results
-        output_file = output_dir / "wucher_miete_outliers.geojson"
-        logging.info(f"Saving {len(wucher_results_4326):,} Wucher cases to: {output_file}")
-        wucher_results_4326.to_file(output_file, driver='GeoJSON')
-        
-        # Log summary statistics
-        rent_col = WUCHER_DETECTION_PARAMS["rent_column"]
-        outlier_rents = wucher_results[rent_col]
-        logging.info(f"Wucher detection summary:")
-        logging.info(f"  Cases detected: {len(wucher_results):,}")
-        logging.info(f"  Rent range: {outlier_rents.min():.2f} - {outlier_rents.max():.2f} EUR/sqm")
-        logging.info(f"  Mean rent: {outlier_rents.mean():.2f} EUR/sqm")
-        logging.info(f"  Median rent: {outlier_rents.median():.2f} EUR/sqm")
-        
-    else:
-        logging.info("No Wucher cases detected with current parameters")
-    
-    logging.info("Wucher Miete detection completed")
 
 
 def main() -> int:
@@ -280,8 +333,11 @@ def main() -> int:
         
         # Compute rent campaign analysis
         rent_campaign_df = compute_rent_campaign_data(
-            heating_type, energy_type, renter_df, THRESHOLD_PARAMS
+            heating_type, energy_type, renter_df, THRESHOLD_PARAMS, loading_dict
         )
+        
+        # Integrate Wucher Miete detection
+        rent_campaign_df = integrate_wucher_detection(rent_campaign_df, loading_dict)
         
         # Filter by districts
         results_dict = filter_by_districts(bezirke_dict, rent_campaign_df)
@@ -294,10 +350,6 @@ def main() -> int:
             results_dict, addresses_results_dict,
             args.output_squares, args.output_addresses
         )
-        
-        # Optional: Wucher Miete detection
-        if args.detect_wucher:
-            run_wucher_detection(loading_dict, args.wucher_output)
         
         logging.info("Pipeline completed successfully")
         return 0
