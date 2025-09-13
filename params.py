@@ -66,3 +66,21 @@ WUCHER_DETECTION_PARAMS = {
     "min_neighbors": 30,          # Minimum number of neighbors required for comparison
     "rent_column": "durchschnMieteQM"  # Column name for rent per square meter
 }
+
+
+# conversation starters
+
+CONVERSATION_STARTERS = {
+    "0000": "Hallo, ich bin von der Linken. Wir reden gerade mit den Nachbar*innen darüber, wie es ihnen mit den Wohn- und Nebenkosten geht. Wie erleben Sie das hier?",
+    "0001": "Viele hier im Viertel erzählen uns, dass die Miete kaum noch zu stemmen ist. Wie geht es Ihnen damit – passt das noch oder wird’s eng?",
+    "0010": "Manche Nachbar*innen berichten, dass sie mit der Fernwärme schwer durchblicken bei den Kosten. Wie ist das bei Ihnen – alles nachvollziehbar oder eher undurchsichtig?",
+    "0011": "Ich höre hier oft: Fernwärme ist teuer, und dazu kommen hohe Mieten. Wie wirkt sich das bei Ihnen aus – ist das für Sie ein Thema?",
+    "0100": "Die Preise für Gas und Öl sind zuletzt enorm gestiegen. Haben Sie das bei sich auch gemerkt, oder hält es sich bei Ihnen noch in Grenzen?",
+    "0101": "Viele zahlen gerade für fossile Heizung und eine hohe Miete – das summiert sich schnell. Wie erleben Sie das bei sich zu Hause?",
+    "1000": "Zentralheizungen können praktisch sein – aber oft gibt es Ärger mit der Abrechnung. Wie läuft das bei Ihnen, passt das oder eher nicht?",
+    "1001": "Bei Zentralheizung und steigenden Mieten hören wir oft, dass die Gesamtkosten explodieren. Wie empfinden Sie das – geht’s noch oder wird es knapp?",
+    "1100": "Bei zentralen Gas- oder Ölheizungen schlagen die Energiepreise besonders durch. Spüren Sie das auch auf der Rechnung?",
+    "1101": "Manche sagen: Fossile Zentralheizung und hohe Miete, das frisst richtig Geld. Wie erleben Sie das bei sich?",
+    "0110": "Energiepreise sind für viele hier eine Belastung – ob Fernwärme oder Gas. Wie ist das bei Ihnen: Haben Sie den Eindruck, dass die Kosten fair verteilt sind?",
+
+}
