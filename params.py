@@ -41,6 +41,14 @@ DATASET_NAMES = {
     "rent": "Durchschnittliche_Nettokaltmiete_und_Anzahl_der_Wohnungen_100m-Gitter"
 }
 
+# Demographics dataset file mapping (without extensions)
+DEMOGRAPHICS_DATASETS = {
+    "elderly_share": "Zensus2022_Anteil_ueber_65_100m-Gitter",
+    "foreigner_share": "Zensus2022_Anteil_Auslaender_100m-Gitter", 
+    "area_per_person": "Zensus2022_Durchschn_Flaeche_je_Bewohner_100m-Gitter",
+    "population": "Zensus2022_Bevoelkerungszahl_100m-Gitter"
+}
+
 # Overpass API configuration
 OVERPASS_CONFIG = {
     "timeout": 180,

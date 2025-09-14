@@ -21,8 +21,8 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from params import PREPROCESS_PARAMS, LOG_LEVEL
-from src.functions import process_df, save_geodataframes
+from params import PREPROCESS_PARAMS, LOG_LEVEL, DEMOGRAPHICS_DATASETS
+from src.functions import process_df, save_geodataframes, process_demographics, save_geodataframe
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -79,6 +79,19 @@ Examples:
         help=f"Output file format (default: {PREPROCESS_PARAMS['output_format']})"
     )
     
+    parser.add_argument(
+        "--process-demographics",
+        action="store_true",
+        help="Process demographics data and create merged demographics GeoJSON file"
+    )
+    
+    parser.add_argument(
+        "--demographics-output",
+        type=str,
+        default="demographics.geojson",
+        help="Output filename for demographics data (default: demographics.geojson)"
+    )
+    
     return parser.parse_args()
 
 
@@ -116,7 +129,9 @@ def run_preprocessing(
     input_path: str,
     output_path: str,
     csv_separator: str,
-    output_format: str
+    output_format: str,
+    process_demographics_flag: bool = False,
+    demographics_output_filename: str = "demographics.geojson"
 ) -> None:
     """Run the main preprocessing workflow."""
     
@@ -148,6 +163,32 @@ def run_preprocessing(
         file_format=output_format
     )
     
+    # Process demographics if requested
+    if process_demographics_flag:
+        logging.info("Processing demographics data...")
+        try:
+            demographics_gdf = process_demographics(
+                path=input_path,
+                sep=csv_separator,
+                cols_to_drop=PREPROCESS_PARAMS["columns_to_drop"],
+                gitter_id_column=PREPROCESS_PARAMS["gitter_id_column"],
+                demographics_datasets=DEMOGRAPHICS_DATASETS
+            )
+            
+            # Save demographics data
+            demographics_output_path = Path(output_path) / demographics_output_filename
+            save_geodataframe(
+                gdf=demographics_gdf,
+                output_path=str(demographics_output_path),
+                file_format=output_format
+            )
+            
+            logging.info(f"Demographics processing complete. Saved to: {demographics_output_path}")
+            
+        except Exception as e:
+            logging.error(f"Demographics processing failed: {e}")
+            raise
+    
     logging.info(f"Preprocessing complete. Output saved to: {output_path}")
 
 
@@ -166,7 +207,9 @@ def main() -> int:
             input_path=args.input_path,
             output_path=args.output_path,
             csv_separator=args.csv_separator,
-            output_format=args.output_format
+            output_format=args.output_format,
+            process_demographics_flag=args.process_demographics,
+            demographics_output_filename=args.demographics_output
         )
         
         logging.info("Preprocessing pipeline completed successfully")

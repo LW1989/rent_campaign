@@ -533,10 +533,15 @@ def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.Data
     pd.DataFrame
         Merged DataFrame with reset index
     """
-    merged_df = list_of_dfs[0]
-    for df in list_of_dfs[1:]:
-        merged_df = pd.merge(merged_df, df, on=on_col, how=how)
-    merged_df.reset_index(drop=False, inplace=True)
+    if not list_of_dfs:
+        return pd.DataFrame()
+    
+    merged_df = list_of_dfs[0].copy()
+    for i, df in enumerate(list_of_dfs[1:], 1):
+        # Use suffixes to avoid column name conflicts, but prefer the first occurrence
+        merged_df = pd.merge(merged_df, df, on=on_col, how=how, suffixes=('', f'_merge_{i}'))
+    
+    merged_df.reset_index(drop=True, inplace=True)
     return merged_df
 
 def calc_rent_campaign_flags(
@@ -991,8 +996,107 @@ def process_df(path, sep, cols_to_drop, on_col, drop_how, how, gitter_id_column)
     logger.success("process_df completed successfully")
     return df_dict
 
+
+def process_demographics(path, sep, cols_to_drop, gitter_id_column, demographics_datasets):
+    """
+    Process demographics CSV files and create a merged demographics GeoDataFrame.
+    
+    Parameters
+    ----------
+    path : str
+        Path to directory containing CSV files
+    sep : str
+        CSV separator character
+    cols_to_drop : list
+        List of columns to drop from datasets
+    gitter_id_column : str
+        Name of the GITTER_ID column
+    demographics_datasets : dict
+        Dictionary mapping demographic categories to CSV filenames (without extension)
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Merged demographics GeoDataFrame with all demographic data
+    """
+    logger.info("Starting process_demographics")
+    logger.debug(f"Parameters - path: {path}, sep: {sep}, demographics_datasets: {demographics_datasets}")
+    
+    # Import all CSV files
+    df_dict = import_dfs(path, sep)
+    logger.info(f"{len(df_dict)} dataframes imported from {path}")
+    
+    # Filter to only demographics datasets
+    demographics_dfs = {}
+    missing_files = []
+    
+    for category, filename in demographics_datasets.items():
+        if filename in df_dict:
+            demographics_dfs[category] = df_dict[filename]
+            logger.debug(f"Found demographics dataset: {category} -> {filename}")
+        else:
+            missing_files.append(filename)
+            logger.warning(f"Missing demographics file: {filename}")
+    
+    if missing_files:
+        logger.error(f"Missing required demographics files: {missing_files}")
+        raise FileNotFoundError(f"Missing demographics files: {missing_files}")
+    
+    # Process each demographics dataset
+    processed_dfs = []
+    for category, df in demographics_dfs.items():
+        logger.debug(f"Processing demographics dataset: {category}")
+        
+        # Clean the dataset
+        df = drop_cols(df, cols_to_drop)
+        df = convert_to_float(df)
+        df = create_geodataframe(df, gitter_id_column)
+        # Keep GITTER_ID_100m column for merging
+        
+        # Store processed dataframe
+        processed_dfs.append(df)
+    
+    # Merge all demographics datasets
+    logger.info("Merging demographics datasets")
+    
+    # Use GITTER_ID_100m for merging if available, otherwise use geometry
+    merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in processed_dfs[0].columns else "geometry"
+    logger.debug(f"Using '{merge_col}' column for merging demographics data")
+    
+    demographic_df = merge_dfs(processed_dfs, merge_col, "inner")
+    
+    # Fill missing values with 0
+    demographic_df.fillna(0, inplace=True)
+    
+    logger.info(f"Demographics processing completed. Final dataset shape: {demographic_df.shape}")
+    logger.debug(f"Demographics columns: {list(demographic_df.columns)}")
+    
+    return demographic_df
+
 import geopandas as gpd
 import os
+
+def save_geodataframe(gdf, output_path, file_format='geojson'):
+    """
+    Save a single GeoDataFrame to disk.
+
+    Parameters:
+    - gdf (gpd.GeoDataFrame): GeoDataFrame to save.
+    - output_path (str): Full path where the file will be saved.
+    - file_format (str): File format to save the GeoDataFrame. Default is 'geojson'.
+
+    Supported formats include: 'gpkg', 'shp', 'geojson', etc.
+    """
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise ValueError(f"Input is not a GeoDataFrame: {type(gdf)}")
+    
+    try:
+        gdf.to_file(output_path, driver=_get_driver(file_format))
+        logger.info(f"Saved demographics GeoDataFrame to: {output_path}")
+    except Exception as e:
+        logger.error(f"Error saving GeoDataFrame to {output_path}: {e}")
+        raise
+
 
 def save_geodataframes(gdf_dict, output_dir='output', file_format='gpkg'):
     """
