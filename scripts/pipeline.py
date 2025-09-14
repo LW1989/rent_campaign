@@ -290,6 +290,14 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         enhanced_results_dict[district_name] = enhanced_gdf
         logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} squares")
     
+    # Add conversation starters to addresses before saving
+    logging.info("Adding conversation starters to addresses")
+    enhanced_addresses_results_dict = {}
+    for district_name, gdf in addresses_results_dict.items():
+        enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+        enhanced_addresses_results_dict[district_name] = enhanced_gdf
+        logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
+    
     # Save enhanced squares
     save_all_to_geojson(
         enhanced_results_dict, 
@@ -297,9 +305,9 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         kind="squares"
     )
     
-    # Save addresses (no conversation starters needed for addresses)
+    # Save enhanced addresses
     save_all_to_geojson(
-        addresses_results_dict,
+        enhanced_addresses_results_dict,
         base_path=output_addresses,
         kind="addresses"
     )
