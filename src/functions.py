@@ -461,7 +461,11 @@ def get_renter_share(renter_df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     renter_df.rename(columns={"Eigentuemerquote": "renter_share"}, inplace=True)
     renter_df["renter_share"] = renter_df["renter_share"].round(2)
 
-    return renter_df[["geometry", "renter_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated column
+    if "GITTER_ID_100m" in renter_df.columns:
+        return renter_df[["geometry", "GITTER_ID_100m", "renter_share"]]
+    else:
+        return renter_df[["geometry", "renter_share"]]
 
 def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -480,7 +484,11 @@ def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     heating_type = calc_total(heating_type, ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"])
     heating_type["central_heating_share"] = heating_type["Zentralheizung"] / heating_type["total"]
 
-    return heating_type[["geometry", "central_heating_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated column
+    if "GITTER_ID_100m" in heating_type.columns:
+        return heating_type[["geometry", "GITTER_ID_100m", "central_heating_share"]]
+    else:
+        return heating_type[["geometry", "central_heating_share"]]
 
 def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -500,7 +508,11 @@ def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     energy_type["fossil_heating_share"] = (energy_type["Gas"] + energy_type["Heizoel"] + energy_type["Kohle"]) / energy_type["total"]
     energy_type["fernwaerme_share"] = energy_type["Fernwaerme"] / energy_type["total"]
 
-    return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated columns
+    if "GITTER_ID_100m" in energy_type.columns:
+        return energy_type[["geometry", "GITTER_ID_100m", "fossil_heating_share", "fernwaerme_share"]]
+    else:
+        return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
 
 
 def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.DataFrame:
@@ -545,7 +557,11 @@ def calc_rent_campaign_flags(
     rent_campaign_df=rent_campaign_df[rent_campaign_df["renter_flag"]==True]
 
 
-    return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and flag columns
+    if "GITTER_ID_100m" in rent_campaign_df.columns:
+        return rent_campaign_df[["geometry", "GITTER_ID_100m", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    else:
+        return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
 
 def get_rent_campaign_df(
         heating_type, 
@@ -569,9 +585,14 @@ def get_rent_campaign_df(
     renter_df=get_renter_share(renter_df)
    
     logger.debug(f"Merging DataFrames with shapes: heating_type_df={heating_type_df.shape}, energy_type_df={energy_type_df.shape}, renter_df={renter_df.shape}")
+    
+    # Check which DataFrames have GITTER_ID_100m column for merging
+    merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in heating_type_df.columns else "geometry"
+    logger.debug(f"Using '{merge_col}' column for merging")
+    
     rent_campaign_df=merge_dfs(
         list_of_dfs=[heating_type_df, energy_type_df, renter_df], 
-        on_col="geometry", 
+        on_col=merge_col, 
         how="inner")
     logger.debug(f"Resulting rent_campaign_df shape: {rent_campaign_df.shape}")
 
@@ -953,7 +974,7 @@ def process_df(path, sep, cols_to_drop, on_col, drop_how, how, gitter_id_column)
         df = drop_cols(df, cols_to_drop)
         df = convert_to_float(df)
         df = create_geodataframe(df, gitter_id_column)
-        df = drop_cols(df, ["GITTER_ID_100m"])
+        # Keep GITTER_ID_100m column for merging instead of dropping it
 
         # write the cleaned frame back into the dict
         df_dict[key] = df
