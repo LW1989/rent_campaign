@@ -786,6 +786,7 @@ def export_gdf_to_umap_geojson(
     name_cols: Tuple[str, str] = ("street", "housenumber"),
     feature_type: Literal["auto", "addresses", "squares"] = "auto",
     title_col: str = "district_name",
+    exclude_cols: Optional[List[str]] = None,
 ) -> str:
     """
     Generic exporter for uMap-ready GeoJSON.
@@ -870,6 +871,13 @@ def export_gdf_to_umap_geojson(
             axis=1,
         )
 
+    # Remove excluded columns if specified
+    if exclude_cols:
+        columns_to_drop = [col for col in exclude_cols if col in gdf.columns]
+        if columns_to_drop:
+            gdf = gdf.drop(columns=columns_to_drop)
+            logger.debug(f"Excluded columns from output: {columns_to_drop}")
+    
     # Write GeoJSON
     gdf.to_file(out_path, driver="GeoJSON")
     return out_path
@@ -883,6 +891,7 @@ def save_all_to_geojson(
     file_prefix: Optional[str] = None,
     name_cols: Tuple[str, str] = ("street", "housenumber"),
     title_col: str = "district_name",
+    exclude_cols: Optional[List[str]] = None,
 ) -> None:
     """
     Generic batch saver for a dict of homogeneous GeoDataFrames
@@ -896,7 +905,9 @@ def save_all_to_geojson(
         file_prefix = f"umap_{'auto' if kind=='auto' else kind}_"
 
     for key, gdf in results_dict.items():
-        out_path = f"{base_path}{file_prefix}{key}.geojson"
+        # Ensure base_path ends with a directory separator
+        base_path_normalized = base_path.rstrip('/') + '/'
+        out_path = f"{base_path_normalized}{file_prefix}{key}.geojson"
         logger.info(f"Exporting {kind} for {key} to {out_path}")
         try:
             # per-GDF auto if requested
@@ -910,6 +921,7 @@ def save_all_to_geojson(
                 name_cols=name_cols,
                 feature_type=per_kind,     # "addresses" or "squares"
                 title_col=title_col,
+                exclude_cols=exclude_cols,
             )
         except Exception as e:
             logger.error(f"Error exporting {key} to {out_path}: {e}")
@@ -1064,6 +1076,16 @@ def process_demographics(path, sep, cols_to_drop, gitter_id_column, demographics
     logger.debug(f"Using '{merge_col}' column for merging demographics data")
     
     demographic_df = merge_dfs(processed_dfs, merge_col, "inner")
+    
+    # Clean up multiple geometry columns - keep only the first one and drop others
+    geometry_cols = [col for col in demographic_df.columns if col.startswith('geometry')]
+    if len(geometry_cols) > 1:
+        logger.debug(f"Found multiple geometry columns: {geometry_cols}. Keeping only the first one.")
+        # Keep the first geometry column and drop the rest
+        cols_to_drop = geometry_cols[1:]
+        demographic_df = demographic_df.drop(columns=cols_to_drop)
+        # Ensure the remaining geometry column is set as the active geometry
+        demographic_df = demographic_df.set_geometry('geometry')
     
     # Fill missing values with 0
     demographic_df.fillna(0, inplace=True)

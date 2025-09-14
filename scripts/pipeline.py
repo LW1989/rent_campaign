@@ -10,6 +10,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+import geopandas as gpd
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -144,6 +145,79 @@ def compute_rent_campaign_data(
     
     logging.info(f"Rent campaign analysis complete. Result shape: {rent_campaign_df.shape}")
     return rent_campaign_df
+
+
+def load_demographics_data(loading_dict: dict):
+    """
+    Extract demographics data from already loaded data dictionary.
+    
+    Parameters
+    ----------
+    loading_dict : dict
+        Dictionary containing already loaded GeoDataFrames
+        
+    Returns
+    -------
+    gpd.GeoDataFrame or None
+        Demographics GeoDataFrame if found, None otherwise
+    """
+    try:
+        logging.info("Extracting demographics data from loaded datasets")
+        demographics_gdf = loading_dict.get("demographics")
+        if demographics_gdf is not None:
+            logging.info(f"Found demographics data with {len(demographics_gdf):,} records")
+            logging.debug(f"Demographics columns: {list(demographics_gdf.columns)}")
+        else:
+            logging.warning("Demographics data not found in loaded datasets")
+        return demographics_gdf
+    except Exception as e:
+        logging.error(f"Error extracting demographics data: {e}")
+        return None
+
+
+def integrate_demographics_data(rent_campaign_df, demographics_gdf):
+    """
+    Integrate demographics data into rent campaign dataframe.
+    
+    Parameters
+    ----------
+    rent_campaign_df : gpd.GeoDataFrame
+        Main rent campaign analysis results
+    demographics_gdf : gpd.GeoDataFrame or None
+        Demographics data to integrate
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Enhanced rent campaign dataframe with demographics data
+    """
+    if demographics_gdf is None:
+        logging.warning("No demographics data to integrate")
+        return rent_campaign_df
+    
+    logging.info("Integrating demographics data into rent campaign analysis")
+    
+    # Use GITTER_ID_100m for merging if available, otherwise use geometry
+    merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in rent_campaign_df.columns else "geometry"
+    logging.debug(f"Using '{merge_col}' column for merging demographics data")
+    
+    # Perform spatial merge with demographics data
+    result = rent_campaign_df.merge(
+        demographics_gdf.drop(columns=['geometry']),  # Drop geometry to avoid conflicts
+        on=merge_col,
+        how='left'
+    )
+    
+    # Fill missing demographics values with 0
+    demographics_cols = ['AnteilUeber65', 'AnteilAuslaender', 'durchschnFlaechejeBew', 'Einwohner']
+    for col in demographics_cols:
+        if col in result.columns:
+            result[col] = result[col].fillna(0)
+    
+    logging.info(f"Demographics integration complete. Result shape: {result.shape}")
+    logging.debug(f"Added demographics columns: {demographics_cols}")
+    
+    return result
 
 
 def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
@@ -298,18 +372,23 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         enhanced_addresses_results_dict[district_name] = enhanced_gdf
         logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
     
-    # Save enhanced squares
+    # Define columns to exclude from final output
+    exclude_columns = ['description', 'renter_flag', 'tooltip', 'flag_key']
+    
+    # Save enhanced squares (excluding specified columns)
     save_all_to_geojson(
         enhanced_results_dict, 
         base_path=output_squares,
-        kind="squares"
+        kind="squares",
+        exclude_cols=exclude_columns
     )
     
-    # Save enhanced addresses
+    # Save enhanced addresses (excluding specified columns)
     save_all_to_geojson(
         enhanced_addresses_results_dict,
         base_path=output_addresses,
-        kind="addresses"
+        kind="addresses",
+        exclude_cols=exclude_columns
     )
     
     logging.info(f"Results saved to {output_squares} and {output_addresses}")
@@ -343,6 +422,12 @@ def main() -> int:
         rent_campaign_df = compute_rent_campaign_data(
             heating_type, energy_type, renter_df, THRESHOLD_PARAMS, loading_dict
         )
+        
+        # Extract demographics data from already loaded data
+        demographics_gdf = load_demographics_data(loading_dict)
+        
+        # Integrate demographics data
+        rent_campaign_df = integrate_demographics_data(rent_campaign_df, demographics_gdf)
         
         # Integrate Wucher Miete detection
         rent_campaign_df = integrate_wucher_detection(rent_campaign_df, loading_dict)
