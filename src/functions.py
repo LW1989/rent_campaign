@@ -613,31 +613,68 @@ def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
     work_crs = "EPSG:3035"
 
     for key, gdf in bezirke_dict.items():
-        overlapping_list=[]
-        logger.info(f"Processing {key} with {len(gdf)} geometries")
-        
-        gdf.to_crs(work_crs)
-        for index, row in gdf.iterrows():
-            overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
-            name=gdf["name"].iloc[0].split("|")[1].strip()
-            overlap["district_name"]=name
-            overlapping_list.append(overlap)
         try:
-            overlapping_df = pd.concat(overlapping_list, ignore_index=True)
+            overlapping_list=[]
+            logger.info(f"Processing {key} with {len(gdf)} geometries")
+            
+            gdf.to_crs(work_crs)
+            for index, row in gdf.iterrows():
+                try:
+                    overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
+                    name=gdf["name"].iloc[0].split("|")[1].strip()
+                    overlap["district_name"]=name
+                    overlapping_list.append(overlap)
+                except Exception as e:
+                    logger.error(f"Error processing geometry {index} for district {key}: {e}")
+                    continue
+            
+            try:
+                overlapping_df = pd.concat(overlapping_list, ignore_index=True)
+            except Exception as e:
+                logger.error(f"Error concatenating overlapping list for {key}: {e}")
+                # Create empty result for this district
+                empty_df = gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=work_crs)
+                results_dict[key] = empty_df
+                continue
+                
+            results_dict[key]=overlapping_df
+            logger.debug(f"Successfully processed district {key}: {len(overlapping_df)} squares")
+            
         except Exception as e:
-            logger.error(f"Error concatenating overlapping list for {key}: {e}")
+            logger.error(f"Failed to process district {key}: {e}")
+            logger.warning(f"Skipping district {key} and continuing with remaining districts")
+            # Create empty result for this district
+            empty_df = gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=work_crs)
+            results_dict[key] = empty_df
             continue
-        results_dict[key]=overlapping_df
 
     return results_dict
 
 def get_all_addresses(results_dict):
     addresses_results_dict={}
     for key, gdf in results_dict.items():
-        logger.info(f"Results for {key}: {len(gdf)} overlapping geometries")
-        addresses=addresses_in_squares_overpass_unified(gdf)
-        addresses=add_umap_tooltip(addresses)
-        addresses_results_dict[key]=addresses
+        try:
+            logger.info(f"Results for {key}: {len(gdf)} overlapping geometries")
+            addresses=addresses_in_squares_overpass_unified(gdf)
+            addresses=add_umap_tooltip(addresses)
+            addresses_results_dict[key]=addresses
+            logger.debug(f"Successfully processed addresses for {key}: {len(addresses)} addresses")
+        except Exception as e:
+            logger.error(f"Failed to process addresses for district {key}: {e}")
+            logger.warning(f"Skipping district {key} and continuing with remaining districts")
+            # Create empty GeoDataFrame with same structure for failed district
+            empty_columns = ['housenumber', 'street', 'postcode', 'city', 'geometry']
+            # Add flag columns if they exist in the original squares
+            if hasattr(gdf, 'columns'):
+                flag_columns = ['central_heating_flag', 'fossil_heating_flag', 'fernwaerme_flag', 'renter_flag', 'wucher_miete_flag']
+                for flag_col in flag_columns:
+                    if flag_col in gdf.columns:
+                        empty_columns.append(flag_col)
+            
+            empty_addresses = gpd.GeoDataFrame(columns=empty_columns, 
+                                             geometry='geometry', crs=gdf.crs if hasattr(gdf, 'crs') else None)
+            addresses_results_dict[key] = empty_addresses
+            continue
 
     return addresses_results_dict
 
@@ -656,7 +693,18 @@ def export_geodf_dict_to_geojson(gdf_dict, output_dir, prefix="layer"):
 def gdf_dict_to_crs(d, crs):
     out = {}
     for k, v in d.items():
-        out[k] = v.to_crs(crs) if isinstance(v, gpd.GeoDataFrame) else v
+        try:
+            if isinstance(v, gpd.GeoDataFrame):
+                out[k] = v.to_crs(crs)
+                logger.debug(f"Successfully transformed {k} to CRS {crs}")
+            else:
+                out[k] = v
+        except Exception as e:
+            logger.error(f"Failed to transform {k} to CRS {crs}: {e}")
+            logger.warning(f"Skipping {k} due to transformation error")
+            # Keep original data even if transformation fails
+            out[k] = v
+            continue
     return out
 
 
@@ -683,11 +731,17 @@ def flags_to_key(row: pd.Series) -> str:
     str
         4-character binary string like "1010" 
     """
+    # Handle missing flag columns gracefully - default to False
+    central_heating = row.get('central_heating_flag', False)
+    fossil_heating = row.get('fossil_heating_flag', False)
+    fernwaerme = row.get('fernwaerme_flag', False)
+    wucher_miete = row.get('wucher_miete_flag', False)
+    
     return (
-        f"{int(row['central_heating_flag'])}"
-        f"{int(row['fossil_heating_flag'])}"
-        f"{int(row['fernwaerme_flag'])}"
-        f"{int(row['wucher_miete_flag'])}"
+        f"{int(central_heating)}"
+        f"{int(fossil_heating)}"
+        f"{int(fernwaerme)}"
+        f"{int(wucher_miete)}"
     )
 
 
@@ -712,6 +766,13 @@ def add_conversation_starters(gdf: gpd.GeoDataFrame, conversation_starters: dict
         GeoDataFrame with additional conversation starter columns
     """
     gdf = gdf.copy()
+    
+    # Handle empty GeoDataFrames
+    if gdf.empty:
+        logger.warning("Empty GeoDataFrame passed to add_conversation_starters - returning empty result")
+        gdf["flag_key"] = pd.Series([], dtype=str)
+        gdf["conversation_start"] = pd.Series([], dtype=str)
+        return gdf
     
     # Generate flag keys
     gdf["flag_key"] = gdf.apply(flags_to_key, axis=1)
