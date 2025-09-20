@@ -34,24 +34,79 @@ class TestPipelineIntegration:
         sample_threshold_dict
     ):
         """Test the main rent campaign data processing function."""
+        # Define the column lists and labels as in the prototype
+        heating_typeshare_list = [
+            "Fernheizung_share",
+            "Etagenheizung_share", 
+            "Blockheizung_share",
+            "Zentralheizung_share",
+            "Einzel_Mehrraumoefen_share",
+            "keine_Heizung_share",
+        ]
+        
+        energy_type_share_list = [
+            "fossil_heating_share",
+            "renewable_share", 
+            "no_energy_type",
+        ]
+        
+        heating_labels = {
+            "Fernheizung_share": "Fernheizung",
+            "Etagenheizung_share": "Etagenheizung",
+            "Blockheizung_share": "Blockheizung", 
+            "Zentralheizung_share": "Zentralheizung",
+            "Einzel_Mehrraumoefen_share": "Öfen",
+            "keine_Heizung_share": "Keine Heizung",
+        }
+        
+        energy_labels = {
+            "fossil_heating_share": "Fossil",
+            "renewable_share": "Erneuerbar",
+            "no_energy_type": "Keine Angabe",
+        }
+        
         result = get_rent_campaign_df(
             heating_type=sample_heating_type_data.copy(),
             energy_type=sample_energy_type_data.copy(),
             renter_df=sample_renter_data.copy(),
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
             threshold_dict=sample_threshold_dict
         )
         
         # Check that the result has the expected columns
         expected_columns = [
             'geometry', 'central_heating_flag', 'fossil_heating_flag', 
-            'fernwaerme_flag', 'renter_flag'
+            'fernwaerme_flag', 'renter_flag', 'heating_pie', 'energy_pie'
         ]
         for col in expected_columns:
             assert col in result.columns, f"Missing column: {col}"
         
         # Check that flags are boolean
-        for flag_col in [c for c in expected_columns if c.endswith('_flag')]:
+        flag_columns = [c for c in expected_columns if c.endswith('_flag')]
+        for flag_col in flag_columns:
             assert result[flag_col].dtype == bool, f"Column {flag_col} is not boolean"
+        
+        # Check that pie columns contain lists of dictionaries
+        assert all(isinstance(x, list) for x in result['heating_pie']), "heating_pie column should contain lists"
+        assert all(isinstance(x, list) for x in result['energy_pie']), "energy_pie column should contain lists"
+        
+        # Check that each pie entry is a list of dictionaries with label and value
+        for pie_list in result['heating_pie']:
+            assert all(isinstance(item, dict) for item in pie_list), "heating_pie items should be dictionaries"
+            for item in pie_list:
+                assert 'label' in item, "heating_pie items should have 'label' key"
+                assert 'value' in item, "heating_pie items should have 'value' key"
+                assert isinstance(item['value'], (int, float)), "heating_pie values should be numeric"
+        
+        for pie_list in result['energy_pie']:
+            assert all(isinstance(item, dict) for item in pie_list), "energy_pie items should be dictionaries"
+            for item in pie_list:
+                assert 'label' in item, "energy_pie items should have 'label' key"
+                assert 'value' in item, "energy_pie items should have 'value' key"
+                assert isinstance(item['value'], (int, float)), "energy_pie values should be numeric"
         
         # Result should only contain areas where renter_flag is True
         assert all(result['renter_flag'] == True), "Non-renter areas should be filtered out"
@@ -83,10 +138,45 @@ class TestPipelineIntegration:
             "renter_share": 0.2
         }
         
+        # Define the column lists and labels as in the prototype
+        heating_typeshare_list = [
+            "Fernheizung_share",
+            "Etagenheizung_share", 
+            "Blockheizung_share",
+            "Zentralheizung_share",
+            "Einzel_Mehrraumoefen_share",
+            "keine_Heizung_share",
+        ]
+        
+        energy_type_share_list = [
+            "fossil_heating_share",
+            "renewable_share", 
+            "no_energy_type",
+        ]
+        
+        heating_labels = {
+            "Fernheizung_share": "Fernheizung",
+            "Etagenheizung_share": "Etagenheizung",
+            "Blockheizung_share": "Blockheizung", 
+            "Zentralheizung_share": "Zentralheizung",
+            "Einzel_Mehrraumoefen_share": "Öfen",
+            "keine_Heizung_share": "Keine Heizung",
+        }
+        
+        energy_labels = {
+            "fossil_heating_share": "Fossil",
+            "renewable_share": "Erneuerbar",
+            "no_energy_type": "Keine Angabe",
+        }
+        
         strict_result = get_rent_campaign_df(
             heating_type=sample_heating_type_data.copy(),
             energy_type=sample_energy_type_data.copy(),
             renter_df=sample_renter_data.copy(),
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
             threshold_dict=strict_thresholds
         )
         
@@ -94,6 +184,10 @@ class TestPipelineIntegration:
             heating_type=sample_heating_type_data.copy(),
             energy_type=sample_energy_type_data.copy(),
             renter_df=sample_renter_data.copy(),
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
             threshold_dict=loose_thresholds
         )
         
@@ -139,11 +233,46 @@ class TestPipelineIntegration:
             "renter_share": 0.5
         }
         
+        # Define the column lists and labels as in the prototype
+        heating_typeshare_list = [
+            "Fernheizung_share",
+            "Etagenheizung_share", 
+            "Blockheizung_share",
+            "Zentralheizung_share",
+            "Einzel_Mehrraumoefen_share",
+            "keine_Heizung_share",
+        ]
+        
+        energy_type_share_list = [
+            "fossil_heating_share",
+            "renewable_share", 
+            "no_energy_type",
+        ]
+        
+        heating_labels = {
+            "Fernheizung_share": "Fernheizung",
+            "Etagenheizung_share": "Etagenheizung",
+            "Blockheizung_share": "Blockheizung", 
+            "Zentralheizung_share": "Zentralheizung",
+            "Einzel_Mehrraumoefen_share": "Öfen",
+            "keine_Heizung_share": "Keine Heizung",
+        }
+        
+        energy_labels = {
+            "fossil_heating_share": "Fossil",
+            "renewable_share": "Erneuerbar",
+            "no_energy_type": "Keine Angabe",
+        }
+        
         # Should handle missing data without crashing
         result = get_rent_campaign_df(
             heating_type=incomplete_heating_data,
             energy_type=incomplete_energy_data,
             renter_df=incomplete_renter_data,
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
             threshold_dict=threshold_dict
         )
         

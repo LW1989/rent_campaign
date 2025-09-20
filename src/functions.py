@@ -465,7 +465,7 @@ def get_renter_share(renter_df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Calculate central heating share from heating type data.
+    Calculate heating type shares from heating type data.
     
     Parameters
     ----------
@@ -475,16 +475,23 @@ def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     Returns
     -------
     gpd.GeoDataFrame
-        DataFrame with 'central_heating_share' column and geometry
+        DataFrame with individual heating type shares, central_heating_share, and geometry
     """
-    heating_type = calc_total(heating_type, ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"])
-    heating_type["central_heating_share"] = heating_type["Zentralheizung"] / heating_type["total"]
+    heating_cols = ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"]
+    heating_type = calc_total(heating_type, heating_cols)
+    
+    # Calculate individual shares
+    for col in heating_cols:
+        heating_type[col + "_share"] = heating_type[col] / heating_type["total"]
+    
+    # Calculate central heating share (Zentralheizung)
+    heating_type["central_heating_share"] = heating_type["Zentralheizung_share"]
 
-    return heating_type[["geometry", "central_heating_share"]]
+    return heating_type[["geometry"] + [col + "_share" for col in heating_cols] + ["central_heating_share"]]
 
 def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Calculate fossil heating and district heating shares from energy type data.
+    Calculate energy type shares from energy type data.
     
     Parameters
     ---------- 
@@ -494,13 +501,18 @@ def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     Returns
     -------
     gpd.GeoDataFrame
-        DataFrame with 'fossil_heating_share', 'fernwaerme_share' columns and geometry
+        DataFrame with aggregated energy type shares and geometry
     """
-    energy_type = calc_total(energy_type, ["Gas", "Heizoel", "Holz_Holzpellets", "Biomasse_Biogas", "Solar_Geothermie_Waermepumpen", "Strom", "Kohle", "Fernwaerme", "kein_Energietraeger"])
+    energy_cols = ["Gas", "Heizoel", "Holz_Holzpellets", "Biomasse_Biogas", "Solar_Geothermie_Waermepumpen", "Strom", "Kohle", "Fernwaerme", "kein_Energietraeger"]
+    energy_type = calc_total(energy_type, energy_cols)
+    
+    # Calculate aggregated shares (matching the prototype)
     energy_type["fossil_heating_share"] = (energy_type["Gas"] + energy_type["Heizoel"] + energy_type["Kohle"]) / energy_type["total"]
+    energy_type["renewable_share"] = (energy_type["Holz_Holzpellets"] + energy_type["Biomasse_Biogas"] + energy_type["Solar_Geothermie_Waermepumpen"] + energy_type["Strom"]) / energy_type["total"]
+    energy_type["no_energy_type"] = energy_type["kein_Energietraeger"] / energy_type["total"]
     energy_type["fernwaerme_share"] = energy_type["Fernwaerme"] / energy_type["total"]
 
-    return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
+    return energy_type[["geometry", "fossil_heating_share", "renewable_share", "no_energy_type", "fernwaerme_share"]]
 
 
 def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.DataFrame:
@@ -527,6 +539,29 @@ def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.Data
     merged_df.reset_index(drop=False, inplace=True)
     return merged_df
 
+def make_pie(row: pd.Series, cols: list, labels: dict) -> list:
+    """
+    Create pie chart data structure for visualization.
+    
+    Parameters
+    ----------
+    row : pd.Series
+        Row containing share columns
+    cols : list
+        List of column names to include in pie chart
+    labels : dict
+        Mapping from column names to display labels
+        
+    Returns
+    -------
+    list
+        List of dictionaries with label and value for pie chart
+    """
+    return [
+        {"label": labels[col], "value": row[col]}
+        for col in cols
+    ]
+
 def calc_rent_campaign_flags(
         rent_campaign_df, 
         threshold_dict={
@@ -545,12 +580,16 @@ def calc_rent_campaign_flags(
     rent_campaign_df=rent_campaign_df[rent_campaign_df["renter_flag"]==True]
 
 
-    return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    return rent_campaign_df
 
 def get_rent_campaign_df(
         heating_type, 
         energy_type, 
         renter_df, 
+        heating_typeshare_list,
+        energy_type_share_list,
+        heating_labels,
+        energy_labels,
         threshold_dict=None):
     
     if threshold_dict is None:
@@ -575,11 +614,24 @@ def get_rent_campaign_df(
         how="inner")
     logger.debug(f"Resulting rent_campaign_df shape: {rent_campaign_df.shape}")
 
+    # Create pie columns first (before filtering)
+    logger.debug("Calculating pie chart values for heating and energy types")
+    rent_campaign_df["heating_pie"] = rent_campaign_df.apply(
+        lambda r: make_pie(r, heating_typeshare_list, heating_labels), axis=1
+    )
+
+    rent_campaign_df["energy_pie"] = rent_campaign_df.apply(
+        lambda r: make_pie(r, energy_type_share_list, energy_labels), axis=1
+    )
+
     # Calculate flags based on thresholds
     logger.debug("Calculating rent campaign flags")
     rent_campaign_df=calc_rent_campaign_flags(rent_campaign_df, threshold_dict)
 
-    return rent_campaign_df
+    # Drop original share columns
+    rent_campaign_df = rent_campaign_df.drop(columns=heating_typeshare_list + energy_type_share_list)
+
+    return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "heating_pie", "energy_pie"]]
 
 
 def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
