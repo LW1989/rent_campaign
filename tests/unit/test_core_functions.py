@@ -12,13 +12,15 @@ import numpy as np
 from shapely.geometry import Polygon
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.functions import (
     calc_total, get_heating_type, get_energy_type, get_renter_share,
-    gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe
+    gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe,
+    process_demographics, save_geodataframe
 )
 
 
@@ -521,3 +523,208 @@ class TestPieChartFunctionality:
             for item in heating_pie + energy_pie:
                 assert item['value'] >= 0
                 assert item['value'] <= 1
+=======
+        assert result.crs == "EPSG:3035"
+
+
+class TestDemographicsProcessing:
+    """Test demographics processing functionality."""
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_process_demographics_success(self, sample_geometries):
+        """Test successful demographics processing with valid data."""
+        # Create sample demographics data
+        elderly_data = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'Anteil_ueber_65': [15.5, 22.3],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        foreigner_data = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'Anteil_Auslaender': [8.2, 12.7],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        area_data = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'Flaeche_je_Bewohner': [45.2, 38.9],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        population_data = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'Bevoelkerungszahl': [125, 98],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        # Mock the import_dfs function to return our test data
+        with patch('src.functions.import_dfs') as mock_import:
+            mock_import.return_value = {
+                'Zensus2022_Anteil_ueber_65_100m-Gitter': elderly_data,
+                'Zensus2022_Anteil_Auslaender_100m-Gitter': foreigner_data,
+                'Zensus2022_Durchschn_Flaeche_je_Bewohner_100m-Gitter': area_data,
+                'Zensus2022_Bevoelkerungszahl_100m-Gitter': population_data
+            }
+            
+            demographics_datasets = {
+                'elderly_share': 'Zensus2022_Anteil_ueber_65_100m-Gitter',
+                'foreigner_share': 'Zensus2022_Anteil_Auslaender_100m-Gitter',
+                'area_per_person': 'Zensus2022_Durchschn_Flaeche_je_Bewohner_100m-Gitter',
+                'population': 'Zensus2022_Bevoelkerungszahl_100m-Gitter'
+            }
+            
+            result = process_demographics(
+                path='test_path',
+                sep=';',
+                cols_to_drop=['x_mp_100m', 'y_mp_100m'],
+                gitter_id_column='GITTER_ID_100m',
+                demographics_datasets=demographics_datasets
+            )
+            
+            # Verify result
+            assert isinstance(result, gpd.GeoDataFrame)
+            assert len(result) == 2
+            assert 'GITTER_ID_100m' in result.columns
+            assert 'geometry' in result.columns
+            assert result.crs == 'EPSG:3035'
+            
+            # Check that all demographic columns are present (may have suffixes due to merging)
+            expected_base_columns = ['Anteil_ueber_65', 'Anteil_Auslaender', 'Flaeche_je_Bewohner', 'Bevoelkerungszahl']
+            result_columns = list(result.columns)
+            for base_col in expected_base_columns:
+                # Check if base column or any suffixed version exists
+                has_column = any(col.startswith(base_col) for col in result_columns)
+                assert has_column, f"Column {base_col} (or suffixed version) should be present in {result_columns}"
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_process_demographics_missing_files(self):
+        """Test demographics processing with missing files."""
+        # Mock import_dfs to return empty dict (missing files)
+        with patch('src.functions.import_dfs') as mock_import:
+            mock_import.return_value = {}
+            
+            demographics_datasets = {
+                'elderly_share': 'Zensus2022_Anteil_ueber_65_100m-Gitter',
+                'foreigner_share': 'Zensus2022_Anteil_Auslaender_100m-Gitter'
+            }
+            
+            with pytest.raises(FileNotFoundError, match="Missing demographics files"):
+                process_demographics(
+                    path='test_path',
+                    sep=';',
+                    cols_to_drop=['x_mp_100m'],
+                    gitter_id_column='GITTER_ID_100m',
+                    demographics_datasets=demographics_datasets
+                )
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_process_demographics_with_nan_values(self, sample_geometries):
+        """Test demographics processing with NaN values."""
+        # Create data with NaN values
+        data_with_nan = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'Anteil_ueber_65': [15.5, np.nan],
+            'Anteil_Auslaender': [np.nan, 12.7],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        with patch('src.functions.import_dfs') as mock_import:
+            mock_import.return_value = {
+                'Zensus2022_Anteil_ueber_65_100m-Gitter': data_with_nan,
+                'Zensus2022_Anteil_Auslaender_100m-Gitter': data_with_nan
+            }
+            
+            demographics_datasets = {
+                'elderly_share': 'Zensus2022_Anteil_ueber_65_100m-Gitter',
+                'foreigner_share': 'Zensus2022_Anteil_Auslaender_100m-Gitter'
+            }
+            
+            result = process_demographics(
+                path='test_path',
+                sep=';',
+                cols_to_drop=[],
+                gitter_id_column='GITTER_ID_100m',
+                demographics_datasets=demographics_datasets
+            )
+            
+            # Verify NaN values are filled with 0
+            assert isinstance(result, gpd.GeoDataFrame)
+            # Check for columns with the base names (may have suffixes)
+            anteil_ueber_65_col = [col for col in result.columns if col.startswith('Anteil_ueber_65')][0]
+            anteil_auslaender_col = [col for col in result.columns if col.startswith('Anteil_Auslaender')][0]
+            assert not result[anteil_ueber_65_col].isna().any()
+            assert not result[anteil_auslaender_col].isna().any()
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_save_geodataframe_success(self, sample_geometries, tmp_path):
+        """Test successful saving of a single GeoDataFrame."""
+        test_gdf = gpd.GeoDataFrame({
+            'value': [1, 2, 3],
+            'geometry': sample_geometries[:3]
+        }, crs='EPSG:3035')
+        
+        output_path = tmp_path / "test_output.geojson"
+        
+        result_path = save_geodataframe(test_gdf, str(output_path))
+        
+        # Verify file was created
+        assert output_path.exists()
+        
+        # Verify we can read it back
+        loaded_gdf = gpd.read_file(output_path)
+        assert len(loaded_gdf) == 3
+        assert 'value' in loaded_gdf.columns
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_save_geodataframe_invalid_input(self):
+        """Test save_geodataframe with invalid input."""
+        with pytest.raises(ValueError, match="Input is not a GeoDataFrame"):
+            save_geodataframe(pd.DataFrame({'test': [1, 2, 3]}), "test.geojson")
+    
+    @pytest.mark.unit
+    @pytest.mark.fast
+    def test_process_demographics_uses_gitter_id_for_merging(self, sample_geometries):
+        """Test that demographics processing uses GITTER_ID_100m for merging when available."""
+        # Create sample data with GITTER_ID_100m
+        data1 = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'value1': [10, 20],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        data2 = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['CRS3035RES100mN2691700E4341100', 'CRS3035RES100mN2691800E4341200'],
+            'value2': [30, 40],
+            'geometry': sample_geometries[:2]
+        }, crs='EPSG:3035')
+        
+        with patch('src.functions.import_dfs') as mock_import:
+            mock_import.return_value = {
+                'dataset1': data1,
+                'dataset2': data2
+            }
+            
+            demographics_datasets = {
+                'category1': 'dataset1',
+                'category2': 'dataset2'
+            }
+            
+            result = process_demographics(
+                path='test_path',
+                sep=';',
+                cols_to_drop=[],
+                gitter_id_column='GITTER_ID_100m',
+                demographics_datasets=demographics_datasets
+            )
+            
+            # Verify result has both values merged correctly
+            assert len(result) == 2
+            assert 'value1' in result.columns
+            assert 'value2' in result.columns
+            assert 'GITTER_ID_100m' in result.columns

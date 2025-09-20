@@ -318,10 +318,13 @@ class TestPreprocessingIntegration:
         assert all(result_gdf.geometry.is_valid)
         assert result_gdf.crs == "EPSG:3035"
         
-        # Should have dropped specified columns
-        dropped_cols = ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen", "GITTER_ID_100m"]
+        # Should have dropped specified columns (but keep GITTER_ID_100m now)
+        dropped_cols = ["x_mp_100m", "y_mp_100m", "werterlaeuternde_Zeichen"]
         for col in dropped_cols:
             assert col not in result_gdf.columns, f"Column {col} should have been dropped"
+        
+        # GITTER_ID_100m should now be preserved for merging
+        assert 'GITTER_ID_100m' in result_gdf.columns, "GITTER_ID_100m should be preserved for merging"
         
         # Should preserve data columns
         assert 'AnzahlWohnungen' in result_gdf.columns
