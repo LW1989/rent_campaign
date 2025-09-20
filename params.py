@@ -76,6 +76,30 @@ WUCHER_DETECTION_PARAMS = {
 }
 
 
+# Metric card configuration
+METRIC_CARD_CONFIG = {
+    "durchschnMieteQM": {
+        "id": "rent_per_m2",
+        "label": "Miete €/m²"
+    },
+    "AnteilUeber65": {
+        "id": "elderly_share",
+        "label": "Anteil über 65"
+    },
+    "AnteilAuslaender": {
+        "id": "foreigner_share", 
+        "label": "Anteil Ausländer"
+    },
+    "durchschnFlaechejeBew": {
+        "id": "area_per_person",
+        "label": "Fläche je Bewohner"
+    },
+    "Einwohner": {
+        "id": "population",
+        "label": "Einwohner"
+    }
+}
+
 # conversation starters
 
 CONVERSATION_STARTERS = {
