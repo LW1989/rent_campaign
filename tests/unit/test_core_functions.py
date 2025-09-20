@@ -523,8 +523,6 @@ class TestPieChartFunctionality:
             for item in heating_pie + energy_pie:
                 assert item['value'] >= 0
                 assert item['value'] <= 1
-=======
-        assert result.crs == "EPSG:3035"
 
 
 class TestDemographicsProcessing:
