@@ -10,6 +10,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+import geopandas as gpd
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -146,6 +147,91 @@ def compute_rent_campaign_data(
     return rent_campaign_df
 
 
+def load_demographics_data(loading_dict: dict):
+    """
+    Extract demographics data from already loaded data dictionary.
+    
+    Parameters
+    ----------
+    loading_dict : dict
+        Dictionary containing already loaded GeoDataFrames
+        
+    Returns
+    -------
+    gpd.GeoDataFrame or None
+        Demographics GeoDataFrame if found, None otherwise
+    """
+    try:
+        logging.info("Extracting demographics data from loaded datasets")
+        demographics_gdf = loading_dict.get("demographics")
+        if demographics_gdf is not None:
+            logging.info(f"Found demographics data with {len(demographics_gdf):,} records")
+            logging.debug(f"Demographics columns: {list(demographics_gdf.columns)}")
+        else:
+            logging.warning("Demographics data not found in loaded datasets")
+        return demographics_gdf
+    except Exception as e:
+        logging.error(f"Error extracting demographics data: {e}")
+        return None
+
+
+def integrate_demographics_data(rent_campaign_df, demographics_gdf):
+    """
+    Integrate demographics data into rent campaign dataframe.
+    
+    Parameters
+    ----------
+    rent_campaign_df : gpd.GeoDataFrame
+        Main rent campaign analysis results
+    demographics_gdf : gpd.GeoDataFrame or None
+        Demographics data to integrate
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Enhanced rent campaign dataframe with demographics data
+    """
+    if demographics_gdf is None:
+        logging.warning("No demographics data to integrate")
+        return rent_campaign_df
+    
+    logging.info("Integrating demographics data into rent campaign analysis")
+    
+    try:
+        # Use GITTER_ID_100m for merging if available, otherwise use geometry
+        merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in rent_campaign_df.columns else "geometry"
+        logging.debug(f"Using '{merge_col}' column for merging demographics data")
+        
+        # Check if merge column exists in demographics data
+        if merge_col not in demographics_gdf.columns:
+            logging.error(f"Merge column '{merge_col}' not found in demographics data. Available columns: {list(demographics_gdf.columns)}")
+            logging.warning("Skipping demographics integration due to missing merge column")
+            return rent_campaign_df
+        
+        # Perform spatial merge with demographics data
+        result = rent_campaign_df.merge(
+            demographics_gdf.drop(columns=['geometry']),  # Drop geometry to avoid conflicts
+            on=merge_col,
+            how='left'
+        )
+        
+        # Fill missing demographics values with 0
+        demographics_cols = ['AnteilUeber65', 'AnteilAuslaender', 'durchschnFlaechejeBew', 'Einwohner']
+        for col in demographics_cols:
+            if col in result.columns:
+                result[col] = result[col].fillna(0)
+        
+        logging.info(f"Demographics integration complete. Result shape: {result.shape}")
+        logging.debug(f"Added demographics columns: {demographics_cols}")
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Failed to integrate demographics data: {e}")
+        logging.warning("Continuing without demographics data")
+        return rent_campaign_df
+
+
 def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
     """
     Integrate Wucher Miete detection into rent campaign data.
@@ -168,85 +254,93 @@ def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
     """
     logging.info("Integrating Wucher Miete detection into rent campaign data")
     
-    # Get rent dataset name and check if available
-    rent_dataset_name = DATASET_NAMES.get("rent")
-    if not rent_dataset_name or rent_dataset_name not in loading_dict:
-        logging.warning(f"Rent dataset '{rent_dataset_name}' not found - adding default wucher_miete_flag=False")
-        rent_campaign_df['wucher_miete_flag'] = False
-        rent_campaign_df['durchschnMieteQM'] = None
-        return rent_campaign_df
-    
-    rent_gdf = loading_dict[rent_dataset_name]
-    logging.info(f"Running Wucher detection on {len(rent_gdf):,} rent records")
-    
-    # Run Wucher detection to get outliers
-    wucher_outliers = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
-    logging.info(f"Detected {len(wucher_outliers):,} Wucher Miete outliers")
-    
-    # Add wucher flag to outliers
-    if len(wucher_outliers) > 0:
-        wucher_outliers['wucher_miete_flag'] = True
-    
-    # Prepare rent data for joining (add rent column to all rent squares)
-    rent_col = WUCHER_DETECTION_PARAMS['rent_column']
-    rent_for_join = rent_gdf[[rent_col, 'geometry']].copy()
-    
-    # First: LEFT JOIN rent campaign with rent data to get rent values
-    logging.info("Joining rent campaign data with rent information")
-    # Use spatial join to match squares
-    campaign_with_rent = rent_campaign_df.sjoin(
-        rent_for_join, 
-        how='left', 
-        predicate='intersects'
-    )
-    
-    # Clean up join artifacts and handle duplicates
-    if 'index_right' in campaign_with_rent.columns:
-        campaign_with_rent = campaign_with_rent.drop('index_right', axis=1)
-    
-    # Remove duplicates keeping first match
-    campaign_with_rent = campaign_with_rent.drop_duplicates(subset=['geometry'])
-    
-    # Second: LEFT JOIN with Wucher outliers to add wucher flags
-    if len(wucher_outliers) > 0:
-        logging.info("Joining with Wucher Miete outliers")
-        # Prepare outliers for join (only need flag and geometry)
-        outliers_for_join = wucher_outliers[['wucher_miete_flag', 'geometry']].copy()
+    try:
+        # Get rent dataset name and check if available
+        rent_dataset_name = DATASET_NAMES.get("rent")
+        if not rent_dataset_name or rent_dataset_name not in loading_dict:
+            logging.warning(f"Rent dataset '{rent_dataset_name}' not found - adding default wucher_miete_flag=False")
+            rent_campaign_df['wucher_miete_flag'] = False
+            rent_campaign_df['durchschnMieteQM'] = None
+            return rent_campaign_df
         
-        # Spatial join with outliers
-        final_result = campaign_with_rent.sjoin(
-            outliers_for_join,
-            how='left',
+        rent_gdf = loading_dict[rent_dataset_name]
+        logging.info(f"Running Wucher detection on {len(rent_gdf):,} rent records")
+        
+        # Run Wucher detection to get outliers
+        wucher_outliers = detect_wucher_miete(rent_gdf, **WUCHER_DETECTION_PARAMS)
+        logging.info(f"Detected {len(wucher_outliers):,} Wucher Miete outliers")
+        
+        # Add wucher flag to outliers
+        if len(wucher_outliers) > 0:
+            wucher_outliers['wucher_miete_flag'] = True
+        
+        # Prepare rent data for joining (add rent column to all rent squares)
+        rent_col = WUCHER_DETECTION_PARAMS['rent_column']
+        rent_for_join = rent_gdf[[rent_col, 'geometry']].copy()
+        
+        # First: LEFT JOIN rent campaign with rent data to get rent values
+        logging.info("Joining rent campaign data with rent information")
+        # Use spatial join to match squares
+        campaign_with_rent = rent_campaign_df.sjoin(
+            rent_for_join, 
+            how='left', 
             predicate='intersects'
         )
         
-        # Clean up join artifacts
-        if 'index_right' in final_result.columns:
-            final_result = final_result.drop('index_right', axis=1)
+        # Clean up join artifacts and handle duplicates
+        if 'index_right' in campaign_with_rent.columns:
+            campaign_with_rent = campaign_with_rent.drop('index_right', axis=1)
         
-        # Remove duplicates
-        final_result = final_result.drop_duplicates(subset=['geometry'])
-    else:
-        final_result = campaign_with_rent.copy()
+        # Remove duplicates keeping first match
+        campaign_with_rent = campaign_with_rent.drop_duplicates(subset=['geometry'])
+        
+        # Second: LEFT JOIN with Wucher outliers to add wucher flags
+        if len(wucher_outliers) > 0:
+            logging.info("Joining with Wucher Miete outliers")
+            # Prepare outliers for join (only need flag and geometry)
+            outliers_for_join = wucher_outliers[['wucher_miete_flag', 'geometry']].copy()
+            
+            # Spatial join with outliers
+            final_result = campaign_with_rent.sjoin(
+                outliers_for_join,
+                how='left',
+                predicate='intersects'
+            )
+            
+            # Clean up join artifacts
+            if 'index_right' in final_result.columns:
+                final_result = final_result.drop('index_right', axis=1)
+            
+            # Remove duplicates
+            final_result = final_result.drop_duplicates(subset=['geometry'])
+        else:
+            final_result = campaign_with_rent.copy()
     
-    # Set default values for missing wucher flags
-    if 'wucher_miete_flag' not in final_result.columns:
-        final_result['wucher_miete_flag'] = False
-    else:
-        final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].fillna(False)
-    
-    # Ensure boolean type for flag
-    final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].astype(bool)
-    
-    # Clean up rent column if missing
-    if rent_col not in final_result.columns:
-        final_result[rent_col] = None
-    
-    logging.info(f"Integration complete. Final shape: {final_result.shape}")
-    logging.info(f"Wucher cases in final data: {final_result['wucher_miete_flag'].sum():,}")
-    logging.info(f"Squares with rent data: {final_result[rent_col].notna().sum():,}")
-    
-    return final_result
+        # Set default values for missing wucher flags
+        if 'wucher_miete_flag' not in final_result.columns:
+            final_result['wucher_miete_flag'] = False
+        else:
+            final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].fillna(False)
+        
+        # Ensure boolean type for flag
+        final_result['wucher_miete_flag'] = final_result['wucher_miete_flag'].astype(bool)
+        
+        # Clean up rent column if missing
+        if rent_col not in final_result.columns:
+            final_result[rent_col] = None
+        
+        logging.info(f"Integration complete. Final shape: {final_result.shape}")
+        logging.info(f"Wucher cases in final data: {final_result['wucher_miete_flag'].sum():,}")
+        logging.info(f"Squares with rent data: {final_result[rent_col].notna().sum():,}")
+        
+        return final_result
+        
+    except Exception as e:
+        logging.error(f"Failed to integrate Wucher Miete detection: {e}")
+        logging.warning("Continuing without Wucher Miete detection - adding default values")
+        rent_campaign_df['wucher_miete_flag'] = False
+        rent_campaign_df['durchschnMieteQM'] = None
+        return rent_campaign_df
 
 
 def filter_by_districts(bezirke_dict: dict, rent_campaign_df):
@@ -286,22 +380,53 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
     logging.info("Adding conversation starters to squares")
     enhanced_results_dict = {}
     for district_name, gdf in results_dict.items():
-        enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
-        enhanced_results_dict[district_name] = enhanced_gdf
-        logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} squares")
+        try:
+            if gdf.empty:
+                logging.warning(f"Skipping empty squares for district {district_name}")
+                enhanced_results_dict[district_name] = gdf
+                continue
+            enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+            enhanced_results_dict[district_name] = enhanced_gdf
+            logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} squares")
+        except Exception as e:
+            logging.error(f"Failed to add conversation starters to squares for district {district_name}: {e}")
+            enhanced_results_dict[district_name] = gdf  # Keep original data
+            continue
     
-    # Save enhanced squares
+    # Add conversation starters to addresses before saving
+    logging.info("Adding conversation starters to addresses")
+    enhanced_addresses_results_dict = {}
+    for district_name, gdf in addresses_results_dict.items():
+        try:
+            if gdf.empty:
+                logging.warning(f"Skipping empty addresses for district {district_name}")
+                enhanced_addresses_results_dict[district_name] = gdf
+                continue
+            enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+            enhanced_addresses_results_dict[district_name] = enhanced_gdf
+            logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
+        except Exception as e:
+            logging.error(f"Failed to add conversation starters to addresses for district {district_name}: {e}")
+            enhanced_addresses_results_dict[district_name] = gdf  # Keep original data
+            continue
+    
+    # Define columns to exclude from final output
+    exclude_columns = ['description', 'renter_flag', 'tooltip', 'flag_key']
+    
+    # Save enhanced squares (excluding specified columns)
     save_all_to_geojson(
         enhanced_results_dict, 
         base_path=output_squares,
-        kind="squares"
+        kind="squares",
+        exclude_cols=exclude_columns
     )
     
-    # Save addresses (no conversation starters needed for addresses)
+    # Save enhanced addresses (excluding specified columns)
     save_all_to_geojson(
-        addresses_results_dict,
+        enhanced_addresses_results_dict,
         base_path=output_addresses,
-        kind="addresses"
+        kind="addresses",
+        exclude_cols=exclude_columns
     )
     
     logging.info(f"Results saved to {output_squares} and {output_addresses}")
@@ -335,6 +460,12 @@ def main() -> int:
         rent_campaign_df = compute_rent_campaign_data(
             heating_type, energy_type, renter_df, THRESHOLD_PARAMS, loading_dict
         )
+        
+        # Extract demographics data from already loaded data
+        demographics_gdf = load_demographics_data(loading_dict)
+        
+        # Integrate demographics data
+        rent_campaign_df = integrate_demographics_data(rent_campaign_df, demographics_gdf)
         
         # Integrate Wucher Miete detection
         rent_campaign_df = integrate_wucher_detection(rent_campaign_df, loading_dict)

@@ -461,7 +461,11 @@ def get_renter_share(renter_df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     renter_df.rename(columns={"Eigentuemerquote": "renter_share"}, inplace=True)
     renter_df["renter_share"] = renter_df["renter_share"].round(2)
 
-    return renter_df[["geometry", "renter_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated column
+    if "GITTER_ID_100m" in renter_df.columns:
+        return renter_df[["geometry", "GITTER_ID_100m", "renter_share"]]
+    else:
+        return renter_df[["geometry", "renter_share"]]
 
 def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -480,7 +484,11 @@ def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     heating_type = calc_total(heating_type, ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"])
     heating_type["central_heating_share"] = heating_type["Zentralheizung"] / heating_type["total"]
 
-    return heating_type[["geometry", "central_heating_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated column
+    if "GITTER_ID_100m" in heating_type.columns:
+        return heating_type[["geometry", "GITTER_ID_100m", "central_heating_share"]]
+    else:
+        return heating_type[["geometry", "central_heating_share"]]
 
 def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
@@ -500,7 +508,11 @@ def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     energy_type["fossil_heating_share"] = (energy_type["Gas"] + energy_type["Heizoel"] + energy_type["Kohle"]) / energy_type["total"]
     energy_type["fernwaerme_share"] = energy_type["Fernwaerme"] / energy_type["total"]
 
-    return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated columns
+    if "GITTER_ID_100m" in energy_type.columns:
+        return energy_type[["geometry", "GITTER_ID_100m", "fossil_heating_share", "fernwaerme_share"]]
+    else:
+        return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
 
 
 def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.DataFrame:
@@ -521,10 +533,15 @@ def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.Data
     pd.DataFrame
         Merged DataFrame with reset index
     """
-    merged_df = list_of_dfs[0]
-    for df in list_of_dfs[1:]:
-        merged_df = pd.merge(merged_df, df, on=on_col, how=how)
-    merged_df.reset_index(drop=False, inplace=True)
+    if not list_of_dfs:
+        return pd.DataFrame()
+    
+    merged_df = list_of_dfs[0].copy()
+    for i, df in enumerate(list_of_dfs[1:], 1):
+        # Use suffixes to avoid column name conflicts, but prefer the first occurrence
+        merged_df = pd.merge(merged_df, df, on=on_col, how=how, suffixes=('', f'_merge_{i}'))
+    
+    merged_df.reset_index(drop=True, inplace=True)
     return merged_df
 
 def calc_rent_campaign_flags(
@@ -545,7 +562,11 @@ def calc_rent_campaign_flags(
     rent_campaign_df=rent_campaign_df[rent_campaign_df["renter_flag"]==True]
 
 
-    return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and flag columns
+    if "GITTER_ID_100m" in rent_campaign_df.columns:
+        return rent_campaign_df[["geometry", "GITTER_ID_100m", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    else:
+        return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
 
 def get_rent_campaign_df(
         heating_type, 
@@ -569,9 +590,14 @@ def get_rent_campaign_df(
     renter_df=get_renter_share(renter_df)
    
     logger.debug(f"Merging DataFrames with shapes: heating_type_df={heating_type_df.shape}, energy_type_df={energy_type_df.shape}, renter_df={renter_df.shape}")
+    
+    # Check which DataFrames have GITTER_ID_100m column for merging
+    merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in heating_type_df.columns else "geometry"
+    logger.debug(f"Using '{merge_col}' column for merging")
+    
     rent_campaign_df=merge_dfs(
         list_of_dfs=[heating_type_df, energy_type_df, renter_df], 
-        on_col="geometry", 
+        on_col=merge_col, 
         how="inner")
     logger.debug(f"Resulting rent_campaign_df shape: {rent_campaign_df.shape}")
 
@@ -587,31 +613,68 @@ def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
     work_crs = "EPSG:3035"
 
     for key, gdf in bezirke_dict.items():
-        overlapping_list=[]
-        logger.info(f"Processing {key} with {len(gdf)} geometries")
-        
-        gdf.to_crs(work_crs)
-        for index, row in gdf.iterrows():
-            overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
-            name=gdf["name"].iloc[0].split("|")[1].strip()
-            overlap["district_name"]=name
-            overlapping_list.append(overlap)
         try:
-            overlapping_df = pd.concat(overlapping_list, ignore_index=True)
+            overlapping_list=[]
+            logger.info(f"Processing {key} with {len(gdf)} geometries")
+            
+            gdf.to_crs(work_crs)
+            for index, row in gdf.iterrows():
+                try:
+                    overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
+                    name=gdf["name"].iloc[0].split("|")[1].strip()
+                    overlap["district_name"]=name
+                    overlapping_list.append(overlap)
+                except Exception as e:
+                    logger.error(f"Error processing geometry {index} for district {key}: {e}")
+                    continue
+            
+            try:
+                overlapping_df = pd.concat(overlapping_list, ignore_index=True)
+            except Exception as e:
+                logger.error(f"Error concatenating overlapping list for {key}: {e}")
+                # Create empty result for this district
+                empty_df = gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=work_crs)
+                results_dict[key] = empty_df
+                continue
+                
+            results_dict[key]=overlapping_df
+            logger.debug(f"Successfully processed district {key}: {len(overlapping_df)} squares")
+            
         except Exception as e:
-            logger.error(f"Error concatenating overlapping list for {key}: {e}")
+            logger.error(f"Failed to process district {key}: {e}")
+            logger.warning(f"Skipping district {key} and continuing with remaining districts")
+            # Create empty result for this district
+            empty_df = gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs=work_crs)
+            results_dict[key] = empty_df
             continue
-        results_dict[key]=overlapping_df
 
     return results_dict
 
 def get_all_addresses(results_dict):
     addresses_results_dict={}
     for key, gdf in results_dict.items():
-        logger.info(f"Results for {key}: {len(gdf)} overlapping geometries")
-        addresses=addresses_in_squares_overpass_unified(gdf)
-        addresses=add_umap_tooltip(addresses)
-        addresses_results_dict[key]=addresses
+        try:
+            logger.info(f"Results for {key}: {len(gdf)} overlapping geometries")
+            addresses=addresses_in_squares_overpass_unified(gdf)
+            addresses=add_umap_tooltip(addresses)
+            addresses_results_dict[key]=addresses
+            logger.debug(f"Successfully processed addresses for {key}: {len(addresses)} addresses")
+        except Exception as e:
+            logger.error(f"Failed to process addresses for district {key}: {e}")
+            logger.warning(f"Skipping district {key} and continuing with remaining districts")
+            # Create empty GeoDataFrame with same structure for failed district
+            empty_columns = ['housenumber', 'street', 'postcode', 'city', 'geometry']
+            # Add flag columns if they exist in the original squares
+            if hasattr(gdf, 'columns'):
+                flag_columns = ['central_heating_flag', 'fossil_heating_flag', 'fernwaerme_flag', 'renter_flag', 'wucher_miete_flag']
+                for flag_col in flag_columns:
+                    if flag_col in gdf.columns:
+                        empty_columns.append(flag_col)
+            
+            empty_addresses = gpd.GeoDataFrame(columns=empty_columns, 
+                                             geometry='geometry', crs=gdf.crs if hasattr(gdf, 'crs') else None)
+            addresses_results_dict[key] = empty_addresses
+            continue
 
     return addresses_results_dict
 
@@ -630,7 +693,18 @@ def export_geodf_dict_to_geojson(gdf_dict, output_dir, prefix="layer"):
 def gdf_dict_to_crs(d, crs):
     out = {}
     for k, v in d.items():
-        out[k] = v.to_crs(crs) if isinstance(v, gpd.GeoDataFrame) else v
+        try:
+            if isinstance(v, gpd.GeoDataFrame):
+                out[k] = v.to_crs(crs)
+                logger.debug(f"Successfully transformed {k} to CRS {crs}")
+            else:
+                out[k] = v
+        except Exception as e:
+            logger.error(f"Failed to transform {k} to CRS {crs}: {e}")
+            logger.warning(f"Skipping {k} due to transformation error")
+            # Keep original data even if transformation fails
+            out[k] = v
+            continue
     return out
 
 
@@ -657,11 +731,17 @@ def flags_to_key(row: pd.Series) -> str:
     str
         4-character binary string like "1010" 
     """
+    # Handle missing flag columns gracefully - default to False
+    central_heating = row.get('central_heating_flag', False)
+    fossil_heating = row.get('fossil_heating_flag', False)
+    fernwaerme = row.get('fernwaerme_flag', False)
+    wucher_miete = row.get('wucher_miete_flag', False)
+    
     return (
-        f"{int(row['central_heating_flag'])}"
-        f"{int(row['fossil_heating_flag'])}"
-        f"{int(row['fernwaerme_flag'])}"
-        f"{int(row['wucher_miete_flag'])}"
+        f"{int(central_heating)}"
+        f"{int(fossil_heating)}"
+        f"{int(fernwaerme)}"
+        f"{int(wucher_miete)}"
     )
 
 
@@ -686,6 +766,13 @@ def add_conversation_starters(gdf: gpd.GeoDataFrame, conversation_starters: dict
         GeoDataFrame with additional conversation starter columns
     """
     gdf = gdf.copy()
+    
+    # Handle empty GeoDataFrames
+    if gdf.empty:
+        logger.warning("Empty GeoDataFrame passed to add_conversation_starters - returning empty result")
+        gdf["flag_key"] = pd.Series([], dtype=str)
+        gdf["conversation_start"] = pd.Series([], dtype=str)
+        return gdf
     
     # Generate flag keys
     gdf["flag_key"] = gdf.apply(flags_to_key, axis=1)
@@ -760,6 +847,7 @@ def export_gdf_to_umap_geojson(
     name_cols: Tuple[str, str] = ("street", "housenumber"),
     feature_type: Literal["auto", "addresses", "squares"] = "auto",
     title_col: str = "district_name",
+    exclude_cols: Optional[List[str]] = None,
 ) -> str:
     """
     Generic exporter for uMap-ready GeoJSON.
@@ -844,6 +932,13 @@ def export_gdf_to_umap_geojson(
             axis=1,
         )
 
+    # Remove excluded columns if specified
+    if exclude_cols:
+        columns_to_drop = [col for col in exclude_cols if col in gdf.columns]
+        if columns_to_drop:
+            gdf = gdf.drop(columns=columns_to_drop)
+            logger.debug(f"Excluded columns from output: {columns_to_drop}")
+    
     # Write GeoJSON
     gdf.to_file(out_path, driver="GeoJSON")
     return out_path
@@ -857,6 +952,7 @@ def save_all_to_geojson(
     file_prefix: Optional[str] = None,
     name_cols: Tuple[str, str] = ("street", "housenumber"),
     title_col: str = "district_name",
+    exclude_cols: Optional[List[str]] = None,
 ) -> None:
     """
     Generic batch saver for a dict of homogeneous GeoDataFrames
@@ -870,7 +966,9 @@ def save_all_to_geojson(
         file_prefix = f"umap_{'auto' if kind=='auto' else kind}_"
 
     for key, gdf in results_dict.items():
-        out_path = f"{base_path}{file_prefix}{key}.geojson"
+        # Ensure base_path ends with a directory separator
+        base_path_normalized = base_path.rstrip('/') + '/'
+        out_path = f"{base_path_normalized}{file_prefix}{key}.geojson"
         logger.info(f"Exporting {kind} for {key} to {out_path}")
         try:
             # per-GDF auto if requested
@@ -884,6 +982,7 @@ def save_all_to_geojson(
                 name_cols=name_cols,
                 feature_type=per_kind,     # "addresses" or "squares"
                 title_col=title_col,
+                exclude_cols=exclude_cols,
             )
         except Exception as e:
             logger.error(f"Error exporting {key} to {out_path}: {e}")
@@ -953,7 +1052,7 @@ def process_df(path, sep, cols_to_drop, on_col, drop_how, how, gitter_id_column)
         df = drop_cols(df, cols_to_drop)
         df = convert_to_float(df)
         df = create_geodataframe(df, gitter_id_column)
-        df = drop_cols(df, ["GITTER_ID_100m"])
+        # Keep GITTER_ID_100m column for merging instead of dropping it
 
         # write the cleaned frame back into the dict
         df_dict[key] = df
@@ -970,8 +1069,117 @@ def process_df(path, sep, cols_to_drop, on_col, drop_how, how, gitter_id_column)
     logger.success("process_df completed successfully")
     return df_dict
 
+
+def process_demographics(path, sep, cols_to_drop, gitter_id_column, demographics_datasets):
+    """
+    Process demographics CSV files and create a merged demographics GeoDataFrame.
+    
+    Parameters
+    ----------
+    path : str
+        Path to directory containing CSV files
+    sep : str
+        CSV separator character
+    cols_to_drop : list
+        List of columns to drop from datasets
+    gitter_id_column : str
+        Name of the GITTER_ID column
+    demographics_datasets : dict
+        Dictionary mapping demographic categories to CSV filenames (without extension)
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Merged demographics GeoDataFrame with all demographic data
+    """
+    logger.info("Starting process_demographics")
+    logger.debug(f"Parameters - path: {path}, sep: {sep}, demographics_datasets: {demographics_datasets}")
+    
+    # Import all CSV files
+    df_dict = import_dfs(path, sep)
+    logger.info(f"{len(df_dict)} dataframes imported from {path}")
+    
+    # Filter to only demographics datasets
+    demographics_dfs = {}
+    missing_files = []
+    
+    for category, filename in demographics_datasets.items():
+        if filename in df_dict:
+            demographics_dfs[category] = df_dict[filename]
+            logger.debug(f"Found demographics dataset: {category} -> {filename}")
+        else:
+            missing_files.append(filename)
+            logger.warning(f"Missing demographics file: {filename}")
+    
+    if missing_files:
+        logger.error(f"Missing required demographics files: {missing_files}")
+        raise FileNotFoundError(f"Missing demographics files: {missing_files}")
+    
+    # Process each demographics dataset
+    processed_dfs = []
+    for category, df in demographics_dfs.items():
+        logger.debug(f"Processing demographics dataset: {category}")
+        
+        # Clean the dataset
+        df = drop_cols(df, cols_to_drop)
+        df = convert_to_float(df)
+        df = create_geodataframe(df, gitter_id_column)
+        # Keep GITTER_ID_100m column for merging
+        
+        # Store processed dataframe
+        processed_dfs.append(df)
+    
+    # Merge all demographics datasets
+    logger.info("Merging demographics datasets")
+    
+    # Use GITTER_ID_100m for merging if available, otherwise use geometry
+    merge_col = "GITTER_ID_100m" if "GITTER_ID_100m" in processed_dfs[0].columns else "geometry"
+    logger.debug(f"Using '{merge_col}' column for merging demographics data")
+    
+    demographic_df = merge_dfs(processed_dfs, merge_col, "inner")
+    
+    # Clean up multiple geometry columns - keep only the first one and drop others
+    geometry_cols = [col for col in demographic_df.columns if col.startswith('geometry')]
+    if len(geometry_cols) > 1:
+        logger.debug(f"Found multiple geometry columns: {geometry_cols}. Keeping only the first one.")
+        # Keep the first geometry column and drop the rest
+        cols_to_drop = geometry_cols[1:]
+        demographic_df = demographic_df.drop(columns=cols_to_drop)
+        # Ensure the remaining geometry column is set as the active geometry
+        demographic_df = demographic_df.set_geometry('geometry')
+    
+    # Fill missing values with 0
+    demographic_df.fillna(0, inplace=True)
+    
+    logger.info(f"Demographics processing completed. Final dataset shape: {demographic_df.shape}")
+    logger.debug(f"Demographics columns: {list(demographic_df.columns)}")
+    
+    return demographic_df
+
 import geopandas as gpd
 import os
+
+def save_geodataframe(gdf, output_path, file_format='geojson'):
+    """
+    Save a single GeoDataFrame to disk.
+
+    Parameters:
+    - gdf (gpd.GeoDataFrame): GeoDataFrame to save.
+    - output_path (str): Full path where the file will be saved.
+    - file_format (str): File format to save the GeoDataFrame. Default is 'geojson'.
+
+    Supported formats include: 'gpkg', 'shp', 'geojson', etc.
+    """
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise ValueError(f"Input is not a GeoDataFrame: {type(gdf)}")
+    
+    try:
+        gdf.to_file(output_path, driver=_get_driver(file_format))
+        logger.info(f"Saved demographics GeoDataFrame to: {output_path}")
+    except Exception as e:
+        logger.error(f"Error saving GeoDataFrame to {output_path}: {e}")
+        raise
+
 
 def save_geodataframes(gdf_dict, output_dir='output', file_format='gpkg'):
     """
