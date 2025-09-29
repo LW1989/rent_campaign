@@ -100,6 +100,25 @@ METRIC_CARD_CONFIG = {
     }
 }
 
+# Direct MultiPolygon Format Configuration
+DIRECT_MULTIPOLYGON_CONFIG = {
+    'format_name': 'heide_multipolygon',
+    'expected_geometry_type': 'MultiPolygon',
+    'expected_feature_count': 1,
+    'polygon_count_range': (1, 20),  # Expected range of polygons per MultiPolygon
+    'naming_pattern': r'^\d+\.\d+$',  # Numeric pattern like "39.0"
+    'processing_mode': 'direct_multipolygon',  # Use MultiPolygon directly
+    'name_parsing': 'flexible',  # Handle both "|" and non-"|" formats
+    'extraction_required': False,  # No geometry extraction needed
+}
+
+# Name Parsing Configuration
+NAME_PARSING_CONFIG = {
+    'stimmbezirke_pattern': r'.*\|\s*([^|]+)\s*\|.*',  # Extract middle part
+    'numeric_pattern': r'^\d+\.\d+$',  # Heide/Neumünster format
+    'fallback_behavior': 'use_full_name',  # Use full name if no pattern matches
+}
+
 # conversation starters
 
 CONVERSATION_STARTERS = {

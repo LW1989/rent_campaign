@@ -40,6 +40,45 @@ from pathlib import Path
 import xarray as xr
 from scipy.ndimage import generic_filter
 
+
+def extract_district_name(name_string: str) -> str:
+    """
+    Extract district name from various input formats.
+    
+    This function handles multiple naming conventions:
+    - Oberhausen format: "BTW 2017 | Stimmbezirk 0203 | Linke 14.35 %" → "Stimmbezirk 0203"
+    - Heide/Neumünster format: "39.0" → "39.0"
+    
+    Parameters
+    ----------
+    name_string : str
+        Name string in any supported format
+        
+    Returns
+    -------
+    str
+        Extracted district name, stripped of whitespace
+        
+    Examples
+    --------
+    >>> extract_district_name("BTW 2017 | Stimmbezirk 0203 | Linke 14.35 %")
+    'Stimmbezirk 0203'
+    >>> extract_district_name("39.0")
+    '39.0'
+    """
+    if "|" in name_string:
+        # Oberhausen format: extract middle part between pipes
+        parts = name_string.split("|")
+        if len(parts) >= 2:
+            return parts[1].strip()
+        else:
+            # Fallback if split doesn't produce expected parts
+            return name_string.strip()
+    else:
+        # Heide/Neumünster format: use full name as-is
+        return name_string.strip()
+
+
 def load_geojson_folder(folder_path: Union[str, Path]) -> Dict[str, gpd.GeoDataFrame]:
     """
     Load all GeoJSON files from a folder into a dictionary of GeoDataFrames.
@@ -675,7 +714,7 @@ def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
             for index, row in gdf.iterrows():
                 try:
                     overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
-                    name=gdf["name"].iloc[0].split("|")[1].strip()
+                    name = extract_district_name(gdf["name"].iloc[0])
                     overlap["district_name"]=name
                     overlapping_list.append(overlap)
                 except Exception as e:
