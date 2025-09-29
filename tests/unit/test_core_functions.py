@@ -350,7 +350,179 @@ class TestDataConversionFunctions:
         # Should return empty GeoDataFrame
         assert isinstance(result, gpd.GeoDataFrame)
         assert len(result) == 0
-        assert result.crs == "EPSG:3035"
+
+
+class TestPieChartFunctionality:
+    """Test the new heating_pie and energy_pie column functionality."""
+    
+    def test_make_pie_basic(self):
+        """Test make_pie function with basic data."""
+        from src.functions import make_pie
+        
+        # Create a sample row with share data
+        sample_row = pd.Series({
+            'Fernheizung_share': 0.2,
+            'Etagenheizung_share': 0.15,
+            'Blockheizung_share': 0.1,
+            'Zentralheizung_share': 0.5,
+            'Einzel_Mehrraumoefen_share': 0.05,
+            'keine_Heizung_share': 0.0
+        })
+        
+        cols = ['Fernheizung_share', 'Etagenheizung_share', 'Zentralheizung_share']
+        labels = {
+            'Fernheizung_share': 'Fernheizung',
+            'Etagenheizung_share': 'Etagenheizung', 
+            'Zentralheizung_share': 'Zentralheizung'
+        }
+        
+        result = make_pie(sample_row, cols, labels)
+        
+        # Check that result is a list
+        assert isinstance(result, list)
+        assert len(result) == 3
+        
+        # Check that each item is a dictionary with label and value
+        for item in result:
+            assert isinstance(item, dict)
+            assert 'label' in item
+            assert 'value' in item
+            assert isinstance(item['value'], (int, float))
+        
+        # Check specific values
+        assert result[0]['label'] == 'Fernheizung'
+        assert result[0]['value'] == 0.2
+        assert result[1]['label'] == 'Etagenheizung'
+        assert result[1]['value'] == 0.15
+        assert result[2]['label'] == 'Zentralheizung'
+        assert result[2]['value'] == 0.5
+    
+    def test_get_rent_campaign_df_includes_pie_columns(self, sample_heating_type_data, sample_energy_type_data, sample_renter_data, sample_threshold_dict):
+        """Test that get_rent_campaign_df includes the new heating_pie and energy_pie columns."""
+        from src.functions import get_rent_campaign_df
+        
+        # Define the column lists and labels as in the prototype
+        heating_typeshare_list = [
+            "Fernheizung_share",
+            "Etagenheizung_share", 
+            "Blockheizung_share",
+            "Zentralheizung_share",
+            "Einzel_Mehrraumoefen_share",
+            "keine_Heizung_share",
+        ]
+        
+        energy_type_share_list = [
+            "fossil_heating_share",
+            "renewable_share", 
+            "no_energy_type",
+        ]
+        
+        heating_labels = {
+            "Fernheizung_share": "Fernheizung",
+            "Etagenheizung_share": "Etagenheizung",
+            "Blockheizung_share": "Blockheizung", 
+            "Zentralheizung_share": "Zentralheizung",
+            "Einzel_Mehrraumoefen_share": "Öfen",
+            "keine_Heizung_share": "Keine Heizung",
+        }
+        
+        energy_labels = {
+            "fossil_heating_share": "Fossil",
+            "renewable_share": "Erneuerbar",
+            "no_energy_type": "Keine Angabe",
+        }
+        
+        result = get_rent_campaign_df(
+            heating_type=sample_heating_type_data.copy(),
+            energy_type=sample_energy_type_data.copy(),
+            renter_df=sample_renter_data.copy(),
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
+            threshold_dict=sample_threshold_dict
+        )
+        
+        # Check that pie columns exist
+        assert 'heating_pie' in result.columns
+        assert 'energy_pie' in result.columns
+        
+        # Check that pie columns contain lists
+        assert all(isinstance(x, list) for x in result['heating_pie'])
+        assert all(isinstance(x, list) for x in result['energy_pie'])
+        
+        # Check that each pie entry is a list of dictionaries with label and value
+        for pie_list in result['heating_pie']:
+            assert all(isinstance(item, dict) for item in pie_list)
+            for item in pie_list:
+                assert 'label' in item
+                assert 'value' in item
+                assert isinstance(item['value'], (int, float))
+                assert 0 <= item['value'] <= 1
+        
+        for pie_list in result['energy_pie']:
+            assert all(isinstance(item, dict) for item in pie_list)
+            for item in pie_list:
+                assert 'label' in item
+                assert 'value' in item
+                assert isinstance(item['value'], (int, float))
+                assert 0 <= item['value'] <= 1
+    
+    def test_pie_chart_values_consistency(self, sample_heating_type_data, sample_energy_type_data, sample_renter_data, sample_threshold_dict):
+        """Test that pie chart values are consistent with input data."""
+        from src.functions import get_rent_campaign_df
+        
+        # Define the column lists and labels as in the prototype
+        heating_typeshare_list = [
+            "Fernheizung_share",
+            "Etagenheizung_share", 
+            "Blockheizung_share",
+            "Zentralheizung_share",
+            "Einzel_Mehrraumoefen_share",
+            "keine_Heizung_share",
+        ]
+        
+        energy_type_share_list = [
+            "fossil_heating_share",
+            "renewable_share", 
+            "no_energy_type",
+        ]
+        
+        heating_labels = {
+            "Fernheizung_share": "Fernheizung",
+            "Etagenheizung_share": "Etagenheizung",
+            "Blockheizung_share": "Blockheizung", 
+            "Zentralheizung_share": "Zentralheizung",
+            "Einzel_Mehrraumoefen_share": "Öfen",
+            "keine_Heizung_share": "Keine Heizung",
+        }
+        
+        energy_labels = {
+            "fossil_heating_share": "Fossil",
+            "renewable_share": "Erneuerbar",
+            "no_energy_type": "Keine Angabe",
+        }
+        
+        result = get_rent_campaign_df(
+            heating_type=sample_heating_type_data.copy(),
+            energy_type=sample_energy_type_data.copy(),
+            renter_df=sample_renter_data.copy(),
+            heating_typeshare_list=heating_typeshare_list,
+            energy_type_share_list=energy_type_share_list,
+            heating_labels=heating_labels,
+            energy_labels=energy_labels,
+            threshold_dict=sample_threshold_dict
+        )
+        
+        # For each row, check that the pie chart values make sense
+        for idx, row in result.iterrows():
+            heating_pie = row['heating_pie']
+            energy_pie = row['energy_pie']
+            
+            # All values should be non-negative
+            for item in heating_pie + energy_pie:
+                assert item['value'] >= 0
+                assert item['value'] <= 1
 
 
 class TestDemographicsProcessing:

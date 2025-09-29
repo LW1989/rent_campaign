@@ -18,12 +18,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from params import (
     INPUT_FOLDER_PATH, BEZIRKE_FOLDER_PATH, OUTPUT_PATH_SQUARES, OUTPUT_PATH_ADDRESSES,
     LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS,
-    CONVERSATION_STARTERS
+    CONVERSATION_STARTERS, METRIC_CARD_CONFIG
 )
 from src.functions import (
     load_geojson_folder, gdf_dict_to_crs, get_rent_campaign_df,
     filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson,
-    detect_wucher_miete, add_conversation_starters
+    detect_wucher_miete, add_conversation_starters,
+    load_city_boundaries, map_districts_to_cities, calculate_city_means,
+    add_metric_cards_to_districts
 )
 
 
@@ -136,10 +138,30 @@ def compute_rent_campaign_data(
     """Compute rent campaign analysis data."""
     logging.info("Computing rent campaign analysis")
     
+    # Create default heating and energy type share lists and labels based on actual data columns
+    heating_typeshare_list = ['Fernheizung_share', 'Etagenheizung_share', 'Blockheizung_share', 'Zentralheizung_share', 'Einzel_Mehrraumoefen_share']
+    energy_type_share_list = ['fossil_heating_share', 'renewable_share', 'fernwaerme_share']
+    heating_labels = {
+        'Fernheizung_share': 'Fernheizung',
+        'Etagenheizung_share': 'Etagenheizung', 
+        'Blockheizung_share': 'Blockheizung',
+        'Zentralheizung_share': 'Zentralheizung',
+        'Einzel_Mehrraumoefen_share': 'Einzel-/Mehrraumöfen'
+    }
+    energy_labels = {
+        'fossil_heating_share': 'Fossile Brennstoffe',
+        'renewable_share': 'Erneuerbare Energien',
+        'fernwaerme_share': 'Fernwärme'
+    }
+    
     rent_campaign_df = get_rent_campaign_df(
         heating_type=heating_type,
         energy_type=energy_type, 
         renter_df=renter_df,
+        heating_typeshare_list=heating_typeshare_list,
+        energy_type_share_list=energy_type_share_list,
+        heating_labels=heating_labels,
+        energy_labels=energy_labels,
         threshold_dict=threshold_dict
     )
     
@@ -355,6 +377,37 @@ def filter_by_districts(bezirke_dict: dict, rent_campaign_df):
     return results_dict
 
 
+def add_metric_cards(results_dict: dict, rent_campaign_df):
+    """Add metric cards to district results."""
+    logging.info("Adding metric cards to district results")
+    
+    try:
+        # Load city boundaries
+        krs_gdf = load_city_boundaries()
+        
+        # Map districts to cities
+        district_city_mapping = map_districts_to_cities(results_dict, krs_gdf)
+        
+        # Get metric columns from config
+        metric_columns = list(METRIC_CARD_CONFIG.keys())
+        
+        # Calculate city means
+        city_means = calculate_city_means(rent_campaign_df, krs_gdf, metric_columns)
+        
+        # Add metric cards to districts
+        enhanced_results = add_metric_cards_to_districts(
+            results_dict, district_city_mapping, city_means, METRIC_CARD_CONFIG
+        )
+        
+        logging.info("Metric cards integration complete")
+        return enhanced_results
+        
+    except Exception as e:
+        logging.error(f"Failed to add metric cards: {e}")
+        logging.warning("Continuing without metric cards")
+        return results_dict
+
+
 def extract_addresses(results_dict: dict):
     """Extract addresses for filtered squares."""
     logging.info("Extracting addresses using Overpass API")
@@ -472,6 +525,9 @@ def main() -> int:
         
         # Filter by districts
         results_dict = filter_by_districts(bezirke_dict, rent_campaign_df)
+        
+        # Add metric cards to district results
+        results_dict = add_metric_cards(results_dict, rent_campaign_df)
         
         # Extract addresses
         addresses_results_dict = extract_addresses(results_dict)

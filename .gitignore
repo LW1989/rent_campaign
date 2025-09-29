@@ -155,6 +155,7 @@ data/*/Icon*
 data/raw_csv/*.csv
 
 # Output directories - ignore all generated files but allow documentation
+output/
 output/*/*.geojson
 output/*/*.json
 output/*/*.csv
@@ -162,6 +163,12 @@ output/*/*.parquet
 output/.DS_Store
 output/*/.DS_Store
 output/*/Icon*
+
+# Implementation notes - ignore documentation and analysis files
+implementation_notes/
+
+# Test outputs - ignore test results and temporary outputs
+test_outputs/
 
 # Log files
 *.log
@@ -195,3 +202,5 @@ Icon*
 
 # Temporary directories
 data/rent_campagne/not needed/
+output/all_districts/
+Icon?

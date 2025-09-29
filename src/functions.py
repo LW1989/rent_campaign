@@ -469,7 +469,7 @@ def get_renter_share(renter_df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Calculate central heating share from heating type data.
+    Calculate heating type shares from heating type data.
     
     Parameters
     ----------
@@ -479,20 +479,28 @@ def get_heating_type(heating_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     Returns
     -------
     gpd.GeoDataFrame
-        DataFrame with 'central_heating_share' column and geometry
+        DataFrame with individual heating type shares, central_heating_share, and geometry
     """
-    heating_type = calc_total(heating_type, ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"])
-    heating_type["central_heating_share"] = heating_type["Zentralheizung"] / heating_type["total"]
+    heating_cols = ["Fernheizung", "Etagenheizung", "Blockheizung", "Zentralheizung", "Einzel_Mehrraumoefen", "keine_Heizung"]
+    heating_type = calc_total(heating_type, heating_cols)
+    
+    # Calculate individual shares
+    for col in heating_cols:
+        heating_type[col + "_share"] = heating_type[col] / heating_type["total"]
+    
+    # Calculate central heating share (Zentralheizung)
+    heating_type["central_heating_share"] = heating_type["Zentralheizung_share"]
 
-    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated column
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated columns
+    base_cols = ["geometry"] + [col + "_share" for col in heating_cols] + ["central_heating_share"]
     if "GITTER_ID_100m" in heating_type.columns:
-        return heating_type[["geometry", "GITTER_ID_100m", "central_heating_share"]]
-    else:
-        return heating_type[["geometry", "central_heating_share"]]
+        base_cols.insert(1, "GITTER_ID_100m")
+    
+    return heating_type[base_cols]
 
 def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Calculate fossil heating and district heating shares from energy type data.
+    Calculate energy type shares from energy type data.
     
     Parameters
     ---------- 
@@ -502,17 +510,23 @@ def get_energy_type(energy_type: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     Returns
     -------
     gpd.GeoDataFrame
-        DataFrame with 'fossil_heating_share', 'fernwaerme_share' columns and geometry
+        DataFrame with aggregated energy type shares and geometry
     """
-    energy_type = calc_total(energy_type, ["Gas", "Heizoel", "Holz_Holzpellets", "Biomasse_Biogas", "Solar_Geothermie_Waermepumpen", "Strom", "Kohle", "Fernwaerme", "kein_Energietraeger"])
+    energy_cols = ["Gas", "Heizoel", "Holz_Holzpellets", "Biomasse_Biogas", "Solar_Geothermie_Waermepumpen", "Strom", "Kohle", "Fernwaerme", "kein_Energietraeger"]
+    energy_type = calc_total(energy_type, energy_cols)
+    
+    # Calculate aggregated shares (matching the prototype)
     energy_type["fossil_heating_share"] = (energy_type["Gas"] + energy_type["Heizoel"] + energy_type["Kohle"]) / energy_type["total"]
+    energy_type["renewable_share"] = (energy_type["Holz_Holzpellets"] + energy_type["Biomasse_Biogas"] + energy_type["Solar_Geothermie_Waermepumpen"] + energy_type["Strom"]) / energy_type["total"]
+    energy_type["no_energy_type"] = energy_type["kein_Energietraeger"] / energy_type["total"]
     energy_type["fernwaerme_share"] = energy_type["Fernwaerme"] / energy_type["total"]
 
     # Include GITTER_ID_100m if it exists, otherwise just return geometry and calculated columns
+    base_cols = ["geometry", "fossil_heating_share", "renewable_share", "no_energy_type", "fernwaerme_share"]
     if "GITTER_ID_100m" in energy_type.columns:
-        return energy_type[["geometry", "GITTER_ID_100m", "fossil_heating_share", "fernwaerme_share"]]
-    else:
-        return energy_type[["geometry", "fossil_heating_share", "fernwaerme_share"]]
+        base_cols.insert(1, "GITTER_ID_100m")
+    
+    return energy_type[base_cols]
 
 
 def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.DataFrame:
@@ -544,6 +558,29 @@ def merge_dfs(list_of_dfs: List[pd.DataFrame], on_col: str, how: str) -> pd.Data
     merged_df.reset_index(drop=True, inplace=True)
     return merged_df
 
+def make_pie(row: pd.Series, cols: list, labels: dict) -> list:
+    """
+    Create pie chart data structure for visualization.
+    
+    Parameters
+    ----------
+    row : pd.Series
+        Row containing share columns
+    cols : list
+        List of column names to include in pie chart
+    labels : dict
+        Mapping from column names to display labels
+        
+    Returns
+    -------
+    list
+        List of dictionaries with label and value for pie chart
+    """
+    return [
+        {"label": labels[col], "value": row[col]}
+        for col in cols
+    ]
+
 def calc_rent_campaign_flags(
         rent_campaign_df, 
         threshold_dict={
@@ -561,17 +598,16 @@ def calc_rent_campaign_flags(
 
     rent_campaign_df=rent_campaign_df[rent_campaign_df["renter_flag"]==True]
 
-
-    # Include GITTER_ID_100m if it exists, otherwise just return geometry and flag columns
-    if "GITTER_ID_100m" in rent_campaign_df.columns:
-        return rent_campaign_df[["geometry", "GITTER_ID_100m", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
-    else:
-        return rent_campaign_df[["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag"]]
+    return rent_campaign_df
 
 def get_rent_campaign_df(
         heating_type, 
         energy_type, 
         renter_df, 
+        heating_typeshare_list,
+        energy_type_share_list,
+        heating_labels,
+        energy_labels,
         threshold_dict=None):
     
     if threshold_dict is None:
@@ -601,11 +637,29 @@ def get_rent_campaign_df(
         how="inner")
     logger.debug(f"Resulting rent_campaign_df shape: {rent_campaign_df.shape}")
 
+    # Create pie columns first (before filtering)
+    logger.debug("Calculating pie chart values for heating and energy types")
+    rent_campaign_df["heating_pie"] = rent_campaign_df.apply(
+        lambda r: make_pie(r, heating_typeshare_list, heating_labels), axis=1
+    )
+
+    rent_campaign_df["energy_pie"] = rent_campaign_df.apply(
+        lambda r: make_pie(r, energy_type_share_list, energy_labels), axis=1
+    )
+
     # Calculate flags based on thresholds
     logger.debug("Calculating rent campaign flags")
     rent_campaign_df=calc_rent_campaign_flags(rent_campaign_df, threshold_dict)
 
-    return rent_campaign_df
+    # Drop original share columns
+    rent_campaign_df = rent_campaign_df.drop(columns=heating_typeshare_list + energy_type_share_list)
+
+    # Include GITTER_ID_100m if it exists, otherwise just return geometry and other columns
+    base_cols = ["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "heating_pie", "energy_pie"]
+    if "GITTER_ID_100m" in rent_campaign_df.columns:
+        base_cols.insert(1, "GITTER_ID_100m")
+    
+    return rent_campaign_df[base_cols]
 
 
 def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
@@ -1507,6 +1561,291 @@ def xarray_to_gdf(da: xr.DataArray, template_gdf: gpd.GeoDataFrame, result_col: 
         result_gdf[result_col] = pd.Series([], dtype=da.dtype)
     
     return result_gdf
+
+
+# =============================================================================
+# METRIC CARD FUNCTIONALITY
+# =============================================================================
+
+def load_city_boundaries(path: str = "/Users/lutz/Documents/red_data/Zenus_2022/vg250_ebenen_0101/VG250_KRS.shp", 
+                        crs: str = "EPSG:3035") -> gpd.GeoDataFrame:
+    """
+    Load city and Landkreis boundaries for spatial analysis.
+    
+    Parameters
+    ----------
+    path : str
+        Path to the VG250_KRS.shp file
+    crs : str
+        Target coordinate reference system
+        
+    Returns
+    -------
+    gpd.GeoDataFrame
+        GeoDataFrame with city/Landkreis boundaries
+    """
+    logger.info(f"Loading city boundaries from: {path}")
+    krs_gdf = import_gdf(path, crs)
+    
+    # Select only required columns
+    krs_gdf = krs_gdf[["GEN", "BEZ", "geometry"]]
+    
+    logger.info(f"Loaded {len(krs_gdf)} city/Landkreis boundaries")
+    return krs_gdf
+
+
+def map_districts_to_cities(results_dict: dict, krs_gdf: gpd.GeoDataFrame) -> dict:
+    """
+    Map each district's squares to their corresponding city or Landkreis.
+    
+    Parameters
+    ----------
+    results_dict : dict
+        Dictionary with district names as keys and GeoDataFrames as values
+    krs_gdf : gpd.GeoDataFrame
+        City/Landkreis boundaries
+        
+    Returns
+    -------
+    dict
+        Dictionary mapping district names to city/Landkreis information
+    """
+    logger.info("Mapping districts to cities/Landkreise")
+    
+    district_city_mapping = {}
+    
+    for district_name, district_gdf in results_dict.items():
+        if district_gdf.empty:
+            logger.warning(f"Empty district {district_name}, skipping city mapping")
+            district_city_mapping[district_name] = None
+            continue
+            
+        try:
+            # Ensure same CRS
+            district_gdf_proj = district_gdf.to_crs(krs_gdf.crs)
+            
+            # Find overlapping cities/Landkreise
+            overlapping_cities = []
+            
+            for idx, city_row in krs_gdf.iterrows():
+                city_geom = city_row.geometry
+                city_name = city_row['GEN']
+                city_type = city_row['BEZ']
+                
+                # Check if any squares in this district overlap with this city
+                overlapping_squares = district_gdf_proj[district_gdf_proj.geometry.intersects(city_geom)]
+                
+                if not overlapping_squares.empty:
+                    overlapping_cities.append({
+                        'city_name': city_name,
+                        'city_type': city_type,
+                        'overlap_count': len(overlapping_squares),
+                        'geometry': city_geom
+                    })
+            
+            if overlapping_cities:
+                # Find the city with the most overlapping squares
+                best_match = max(overlapping_cities, key=lambda x: x['overlap_count'])
+                district_city_mapping[district_name] = best_match
+                logger.debug(f"District {district_name} mapped to {best_match['city_name']} ({best_match['city_type']})")
+            else:
+                logger.warning(f"No city/Landkreis found for district {district_name}")
+                district_city_mapping[district_name] = None
+                
+        except Exception as e:
+            logger.error(f"Error mapping district {district_name} to city: {e}")
+            district_city_mapping[district_name] = None
+    
+    logger.info(f"Successfully mapped {len([v for v in district_city_mapping.values() if v is not None])} districts to cities")
+    return district_city_mapping
+
+
+def calculate_city_means(rent_campaign_df: gpd.GeoDataFrame, krs_gdf: gpd.GeoDataFrame, 
+                        metric_columns: list) -> dict:
+    """
+    Calculate mean values for each metric column per city/Landkreis.
+    
+    Parameters
+    ----------
+    rent_campaign_df : gpd.GeoDataFrame
+        Full rent campaign data with all squares
+    krs_gdf : gpd.GeoDataFrame
+        City/Landkreis boundaries
+    metric_columns : list
+        List of column names to calculate means for
+        
+    Returns
+    -------
+    dict
+        Dictionary mapping city names to mean values for each metric
+    """
+    logger.info(f"Calculating city means for {len(metric_columns)} metrics")
+    
+    # Ensure same CRS
+    rent_campaign_proj = rent_campaign_df.to_crs(krs_gdf.crs)
+    
+    city_means = {}
+    
+    for idx, city_row in krs_gdf.iterrows():
+        city_name = city_row['GEN']
+        city_geom = city_row.geometry
+        
+        # Find squares within this city
+        city_squares = rent_campaign_proj[rent_campaign_proj.geometry.intersects(city_geom)]
+        
+        if not city_squares.empty:
+            city_means[city_name] = {}
+            
+            for metric_col in metric_columns:
+                if metric_col in city_squares.columns:
+                    # Calculate mean, excluding NaN values
+                    valid_values = city_squares[metric_col].dropna()
+                    if not valid_values.empty:
+                        city_means[city_name][metric_col] = valid_values.mean()
+                    else:
+                        city_means[city_name][metric_col] = None
+                else:
+                    logger.warning(f"Column {metric_col} not found in city squares for {city_name}")
+                    city_means[city_name][metric_col] = None
+        else:
+            logger.warning(f"No squares found for city {city_name}")
+            city_means[city_name] = {col: None for col in metric_columns}
+    
+    logger.info(f"Calculated means for {len(city_means)} cities")
+    return city_means
+
+
+def create_metric_card(value: float, group_mean: float, metric_id: str, metric_label: str) -> dict:
+    """
+    Create a metric card dictionary for a single metric.
+    
+    Parameters
+    ----------
+    value : float
+        Individual value for this square
+    group_mean : float
+        Mean value for the city/Landkreis
+    metric_id : str
+        Unique identifier for the metric
+    metric_label : str
+        Human-readable label for the metric
+        
+    Returns
+    -------
+    dict
+        Metric card dictionary with all required fields
+    """
+    if pd.isna(value) or pd.isna(group_mean) or group_mean == 0:
+        return {
+            "id": metric_id,
+            "label": metric_label,
+            "value": value,
+            "group_mean": group_mean,
+            "abs_diff": None,
+            "pct_diff": None,
+            "direction": "equal"
+        }
+    
+    abs_diff = value - group_mean
+    pct_diff = (value / group_mean) - 1
+    
+    if abs_diff > 0:
+        direction = "above"
+    elif abs_diff < 0:
+        direction = "below"
+    else:
+        direction = "equal"
+    
+    return {
+        "id": metric_id,
+        "label": metric_label,
+        "value": value,
+        "group_mean": group_mean,
+        "abs_diff": abs_diff,
+        "pct_diff": pct_diff,
+        "direction": direction
+    }
+
+
+def add_metric_cards_to_districts(results_dict: dict, district_city_mapping: dict, 
+                                 city_means: dict, metric_config: dict) -> dict:
+    """
+    Add metric cards to each district's squares.
+    
+    Parameters
+    ----------
+    results_dict : dict
+        Dictionary with district GeoDataFrames
+    district_city_mapping : dict
+        Mapping of districts to cities
+    city_means : dict
+        Mean values per city for each metric
+    metric_config : dict
+        Configuration for metric columns and labels
+        
+    Returns
+    -------
+    dict
+        Updated results_dict with metric cards added
+    """
+    logger.info("Adding metric cards to district squares")
+    
+    enhanced_results = {}
+    
+    for district_name, district_gdf in results_dict.items():
+        if district_gdf.empty:
+            enhanced_results[district_name] = district_gdf
+            continue
+            
+        try:
+            # Get city information for this district
+            city_info = district_city_mapping.get(district_name)
+            
+            if city_info is None:
+                logger.warning(f"No city mapping for district {district_name}, skipping metric cards")
+                enhanced_results[district_name] = district_gdf
+                continue
+            
+            city_name = city_info['city_name']
+            city_means_for_city = city_means.get(city_name, {})
+            
+            # Create a copy to avoid modifying original
+            enhanced_gdf = district_gdf.copy()
+            
+            # Add metric cards for each row
+            metric_cards = []
+            
+            for idx, row in enhanced_gdf.iterrows():
+                row_metric_cards = {}
+                
+                for metric_col, metric_info in metric_config.items():
+                    if metric_col in row:
+                        value = row[metric_col]
+                        group_mean = city_means_for_city.get(metric_col)
+                        
+                        metric_card = create_metric_card(
+                            value=value,
+                            group_mean=group_mean,
+                            metric_id=metric_info['id'],
+                            metric_label=metric_info['label']
+                        )
+                        
+                        row_metric_cards[metric_info['id']] = metric_card
+                
+                metric_cards.append(row_metric_cards)
+            
+            # Add metric_cards column
+            enhanced_gdf['metric_cards'] = metric_cards
+            
+            enhanced_results[district_name] = enhanced_gdf
+            logger.debug(f"Added metric cards to {len(enhanced_gdf)} squares in district {district_name}")
+            
+        except Exception as e:
+            logger.error(f"Error adding metric cards to district {district_name}: {e}")
+            enhanced_results[district_name] = district_gdf
+    
+    logger.info(f"Successfully added metric cards to {len(enhanced_results)} districts")
+    return enhanced_results
 
 
 def detect_wucher_miete(
