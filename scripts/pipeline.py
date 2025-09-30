@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
 Examples:
   python scripts/pipeline.py
   python scripts/pipeline.py --input-folder /path/to/data --output-squares /path/to/squares/
+  python scripts/pipeline.py --bezirke-folder data/auswahl_theo --skip-addresses  # Fast mode: squares only
         """
     )
     
@@ -80,6 +81,12 @@ Examples:
         type=str,
         default=OUTPUT_PATH_ADDRESSES,
         help=f"Output path for addresses GeoJSON files (default: {OUTPUT_PATH_ADDRESSES})"
+    )
+    
+    parser.add_argument(
+        "--skip-addresses",
+        action="store_true",
+        help="Skip address extraction (fastest, only generates squares)"
     )
     
     
@@ -446,22 +453,25 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
             enhanced_results_dict[district_name] = gdf  # Keep original data
             continue
     
-    # Add conversation starters to addresses before saving
-    logging.info("Adding conversation starters to addresses")
+    # Add conversation starters to addresses before saving (if addresses were extracted)
     enhanced_addresses_results_dict = {}
-    for district_name, gdf in addresses_results_dict.items():
-        try:
-            if gdf.empty:
-                logging.warning(f"Skipping empty addresses for district {district_name}")
-                enhanced_addresses_results_dict[district_name] = gdf
+    if addresses_results_dict:
+        logging.info("Adding conversation starters to addresses")
+        for district_name, gdf in addresses_results_dict.items():
+            try:
+                if gdf.empty:
+                    logging.warning(f"Skipping empty addresses for district {district_name}")
+                    enhanced_addresses_results_dict[district_name] = gdf
+                    continue
+                enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+                enhanced_addresses_results_dict[district_name] = enhanced_gdf
+                logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
+            except Exception as e:
+                logging.error(f"Failed to add conversation starters to addresses for district {district_name}: {e}")
+                enhanced_addresses_results_dict[district_name] = gdf  # Keep original data
                 continue
-            enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
-            enhanced_addresses_results_dict[district_name] = enhanced_gdf
-            logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
-        except Exception as e:
-            logging.error(f"Failed to add conversation starters to addresses for district {district_name}: {e}")
-            enhanced_addresses_results_dict[district_name] = gdf  # Keep original data
-            continue
+    else:
+        logging.info("Skipping address export (no addresses extracted)")
     
     # Define columns to exclude from final output
     exclude_columns = ['description', 'renter_flag', 'tooltip', 'flag_key']
@@ -474,15 +484,17 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         exclude_cols=exclude_columns
     )
     
-    # Save enhanced addresses (excluding specified columns)
-    save_all_to_geojson(
-        enhanced_addresses_results_dict,
-        base_path=output_addresses,
-        kind="addresses",
-        exclude_cols=exclude_columns
-    )
-    
-    logging.info(f"Results saved to {output_squares} and {output_addresses}")
+    # Save enhanced addresses (excluding specified columns) only if addresses were extracted
+    if enhanced_addresses_results_dict:
+        save_all_to_geojson(
+            enhanced_addresses_results_dict,
+            base_path=output_addresses,
+            kind="addresses",
+            exclude_cols=exclude_columns
+        )
+        logging.info(f"Results saved to {output_squares} and {output_addresses}")
+    else:
+        logging.info(f"Squares saved to {output_squares} (addresses skipped)")
 
 
 
@@ -529,8 +541,12 @@ def main() -> int:
         # Add metric cards to district results
         results_dict = add_metric_cards(results_dict, rent_campaign_df)
         
-        # Extract addresses
-        addresses_results_dict = extract_addresses(results_dict)
+        # Extract addresses (optional)
+        if args.skip_addresses:
+            logging.info("Skipping address extraction (--skip-addresses flag set)")
+            addresses_results_dict = {}
+        else:
+            addresses_results_dict = extract_addresses(results_dict)
         
         # Save results
         save_results(
