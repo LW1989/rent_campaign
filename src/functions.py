@@ -702,20 +702,40 @@ def get_rent_campaign_df(
 
 
 def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
-    results_dict={}
+    results_dict = {}
+    color_dict = {}  # NEW: Store district colors
     work_crs = "EPSG:3035"
 
     for key, gdf in bezirke_dict.items():
         try:
-            overlapping_list=[]
+            overlapping_list = []
             logger.info(f"Processing {key} with {len(gdf)} geometries")
+            
+            # Extract district color from _umap_options
+            district_color = None
+            if "_umap_options" in gdf.columns and len(gdf) > 0:
+                try:
+                    umap_opts = gdf["_umap_options"].iloc[0]
+                    # Handle both string (JSON) and dict formats
+                    if isinstance(umap_opts, str):
+                        import json
+                        umap_opts = json.loads(umap_opts)
+                    district_color = umap_opts.get("fillColor", None)
+                    if district_color:
+                        logger.debug(f"Extracted color {district_color} for district {key}")
+                except Exception as e:
+                    logger.warning(f"Could not extract color from {key}: {e}")
+                    district_color = None
+            
+            # Store color for this district
+            color_dict[key] = district_color
             
             gdf.to_crs(work_crs)
             for index, row in gdf.iterrows():
                 try:
                     overlap = squares_in_municipality(gdf, rent_campaign_df, mun_index=index, min_overlap_ratio=0.10)
                     name = extract_district_name(gdf["name"].iloc[0])
-                    overlap["district_name"]=name
+                    overlap["district_name"] = name
                     overlapping_list.append(overlap)
                 except Exception as e:
                     logger.error(f"Error processing geometry {index} for district {key}: {e}")
@@ -730,7 +750,7 @@ def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
                 results_dict[key] = empty_df
                 continue
                 
-            results_dict[key]=overlapping_df
+            results_dict[key] = overlapping_df
             logger.debug(f"Successfully processed district {key}: {len(overlapping_df)} squares")
             
         except Exception as e:
@@ -741,7 +761,7 @@ def filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df):
             results_dict[key] = empty_df
             continue
 
-    return results_dict
+    return results_dict, color_dict  # Return both results and colors
 
 def get_all_addresses(results_dict):
     addresses_results_dict={}
@@ -942,6 +962,7 @@ def export_gdf_to_umap_geojson(
     title_col: str = "district_name",
     exclude_cols: Optional[List[str]] = None,
     selection_type: Literal["old_selection", "new_selection"] = "old_selection",
+    override_color: Optional[str] = None,
 ) -> str:
     """
     Generic exporter for uMap-ready GeoJSON.
@@ -961,8 +982,12 @@ def export_gdf_to_umap_geojson(
     feature_type : force behavior ("addresses" or "squares") or "auto" to infer from geometry
     title_col : column used as title (e.g., "district_name")
     selection_type : data source type for color coding
-            - "old_selection" → red #e74c3c (voting districts)
+            - "old_selection" → red #e74c3c (voting districts) or inherited color
             - "new_selection" → grey #9e9e9e (city-level data)
+    override_color : hex color to override default (only applied for old_selection)
+            - If provided and selection_type is "old_selection", uses this color
+            - Enables color inheritance from input district files
+            - Example: "#2d0a41" (purple), "#ff0000" (red), "#2E8B57" (green)
     """
     if gdf.empty:
         raise ValueError("Input GeoDataFrame is empty.")
@@ -976,8 +1001,14 @@ def export_gdf_to_umap_geojson(
     if feature_type == "auto":
         feature_type = "addresses" if inferred == "point" else "squares"
     
-    # Map selection type to color
-    color = "#e74c3c" if selection_type == "old_selection" else "#9e9e9e"
+    # Determine color: override takes precedence for old_selection, fallback to defaults
+    if override_color and selection_type == "old_selection":
+        # Use district-specific color from input file
+        color = override_color
+        logger.debug(f"Using inherited color: {color}")
+    else:
+        # Use default color based on selection type
+        color = "#e74c3c" if selection_type == "old_selection" else "#9e9e9e"
 
     # Build 'name'
     if feature_type == "addresses":
@@ -1054,6 +1085,7 @@ def save_all_to_geojson(
     title_col: str = "district_name",
     exclude_cols: Optional[List[str]] = None,
     selection_type: Literal["old_selection", "new_selection"] = "old_selection",
+    district_colors: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Generic batch saver for a dict of homogeneous GeoDataFrames
@@ -1077,6 +1109,11 @@ def save_all_to_geojson(
             if per_kind == "auto":
                 per_kind = "addresses" if _geom_kind(gdf) == "point" else "squares"
 
+            # Get district-specific color if available
+            override_color = None
+            if district_colors and key in district_colors:
+                override_color = district_colors[key]
+
             export_gdf_to_umap_geojson(
                 gdf,
                 out_path,
@@ -1085,6 +1122,7 @@ def save_all_to_geojson(
                 title_col=title_col,
                 exclude_cols=exclude_cols,
                 selection_type=selection_type,
+                override_color=override_color,
             )
         except Exception as e:
             logger.error(f"Error exporting {key} to {out_path}: {e}")

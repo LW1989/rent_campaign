@@ -381,15 +381,16 @@ def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
 
 
 def filter_by_districts(bezirke_dict: dict, rent_campaign_df):
-    """Filter squares by voting districts."""
+    """Filter squares by voting districts and extract colors."""
     logging.info("Filtering squares by voting districts")
     
-    results_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
+    results_dict, color_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
     
     total_squares = sum(len(gdf) for gdf in results_dict.values())
     logging.info(f"Filtered results: {len(results_dict)} districts, {total_squares} total squares")
+    logging.info(f"Extracted colors for {len([c for c in color_dict.values() if c])} districts")
     
-    return results_dict
+    return results_dict, color_dict
 
 
 def add_metric_cards(results_dict: dict, rent_campaign_df):
@@ -436,7 +437,8 @@ def extract_addresses(results_dict: dict):
 
 
 def save_results(results_dict: dict, addresses_results_dict: dict, 
-                output_squares: str, output_addresses: str, selection_type: str = "old_selection"):
+                output_squares: str, output_addresses: str, selection_type: str = "old_selection",
+                district_colors: dict = None):
     """Save analysis results to GeoJSON files."""
     logging.info("Saving results to GeoJSON files")
     
@@ -490,7 +492,8 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         base_path=output_squares,
         kind="squares",
         exclude_cols=exclude_columns,
-        selection_type=selection_type
+        selection_type=selection_type,
+        district_colors=district_colors
     )
     
     # Save enhanced addresses (excluding specified columns) only if addresses were extracted
@@ -500,7 +503,8 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
             base_path=output_addresses,
             kind="addresses",
             exclude_cols=exclude_columns,
-            selection_type=selection_type
+            selection_type=selection_type,
+            district_colors=district_colors
         )
         logging.info(f"Results saved to {output_squares} and {output_addresses}")
     else:
@@ -545,8 +549,8 @@ def main() -> int:
         # Integrate Wucher Miete detection
         rent_campaign_df = integrate_wucher_detection(rent_campaign_df, loading_dict)
         
-        # Filter by districts
-        results_dict = filter_by_districts(bezirke_dict, rent_campaign_df)
+        # Filter by districts and extract colors
+        results_dict, district_colors = filter_by_districts(bezirke_dict, rent_campaign_df)
         
         # Add metric cards to district results
         results_dict = add_metric_cards(results_dict, rent_campaign_df)
@@ -562,7 +566,8 @@ def main() -> int:
         save_results(
             results_dict, addresses_results_dict,
             args.output_squares, args.output_addresses,
-            selection_type=args.selection_type
+            selection_type=args.selection_type,
+            district_colors=district_colors
         )
         
         logging.info("Pipeline completed successfully")
