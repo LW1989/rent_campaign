@@ -963,6 +963,9 @@ def export_gdf_to_umap_geojson(
     exclude_cols: Optional[List[str]] = None,
     selection_type: Literal["old_selection", "new_selection"] = "old_selection",
     override_color: Optional[str] = None,
+    population_stats: Optional[dict] = None,
+    square_city_mapping: Optional[dict] = None,
+    opacity_config: Optional[dict] = None,
 ) -> str:
     """
     Generic exporter for uMap-ready GeoJSON.
@@ -988,6 +991,22 @@ def export_gdf_to_umap_geojson(
             - If provided and selection_type is "old_selection", uses this color
             - Enables color inheritance from input district files
             - Example: "#2d0a41" (purple), "#ff0000" (red), "#2E8B57" (green)
+    population_stats : dict, optional
+        City-level population statistics from calculate_city_population_stats()
+        Format: {city_name: {"min": float, "max": float, "count": int}}
+    square_city_mapping : dict, optional
+        Mapping of square indices to city names
+        Format: {index: city_name}
+    opacity_config : dict, optional
+        Configuration for opacity scaling with keys:
+        - enabled (bool): Whether to use dynamic opacity
+        - min_opacity (float): Minimum opacity value
+        - max_opacity (float): Maximum opacity value
+        - fallback_opacity (float): Default when scaling unavailable
+        - population_column (str): Column name for population data
+        - use_robust_scaling (bool): Enable percentile-based clipping
+        - lower_percentile (float): Lower clip boundary (%)
+        - upper_percentile (float): Upper clip boundary (%)
     """
     if gdf.empty:
         raise ValueError("Input GeoDataFrame is empty.")
@@ -1000,6 +1019,11 @@ def export_gdf_to_umap_geojson(
     inferred = _geom_kind(gdf)
     if feature_type == "auto":
         feature_type = "addresses" if inferred == "point" else "squares"
+    
+    # Get opacity configuration
+    if opacity_config is None:
+        from params import OPACITY_SCALING_CONFIG
+        opacity_config = OPACITY_SCALING_CONFIG
     
     # Determine color: override takes precedence for old_selection, fallback to defaults
     if override_color and selection_type == "old_selection":
@@ -1051,17 +1075,71 @@ def export_gdf_to_umap_geojson(
             axis=1,
         )
     else:  # squares
-        # polygon style: stroke + fill
-        gdf["_umap_options"] = gdf.apply(
-            lambda _: {
-                "color": color,            # stroke color
-                "weight": 2,               # stroke width
-                "opacity": 0.9,            # stroke opacity
-                "fillColor": color,        # fill color
-                "fillOpacity": 0.15,       # fill opacity for visibility
-            },
-            axis=1,
+        # Determine if we should use dynamic opacity
+        use_dynamic_opacity = (
+            opacity_config.get("enabled", False) and
+            population_stats is not None and
+            square_city_mapping is not None and
+            feature_type == "squares"
         )
+        
+        if use_dynamic_opacity:
+            logger.debug("Using population-based dynamic opacity scaling")
+            
+            def make_umap_options(row):
+                # Get square's city
+                city_name = square_city_mapping.get(row.name, None)
+                
+                # Get city population stats
+                city_stats = population_stats.get(city_name, {}) if city_name else {}
+                city_min = city_stats.get("min", None)
+                city_max = city_stats.get("max", None)
+                
+                # Get square's population
+                pop_col = opacity_config.get("population_column", "Einwohner")
+                population = row.get(pop_col, None)
+                
+                # Calculate opacity
+                if (city_min is not None and city_max is not None and 
+                    population is not None and not pd.isna(population)):
+                    
+                    # Use the helper function
+                    opacity = calculate_population_opacity(
+                        population,
+                        city_min,
+                        city_max,
+                        opacity_config.get("min_opacity", 0.1),
+                        opacity_config.get("max_opacity", 0.6)
+                    )
+                else:
+                    # Fallback for missing data
+                    opacity = opacity_config.get("fallback_opacity", 0.15)
+                
+                return {
+                    "color": color,
+                    "weight": 2,
+                    "opacity": 0.9,
+                    "fillColor": color,
+                    "fillOpacity": opacity,  # ✅ Dynamic opacity
+                }
+            
+            gdf["_umap_options"] = gdf.apply(make_umap_options, axis=1)
+        
+        else:
+            # Use static opacity (backward compatibility)
+            logger.debug("Using static fillOpacity (dynamic scaling disabled or data unavailable)")
+            fallback_opacity = opacity_config.get("fallback_opacity", 0.15)
+            
+            gdf["_umap_options"] = gdf.apply(
+                lambda _: {
+                    "color": color,
+                    "weight": 2,
+                    "opacity": 0.9,
+                    "fillColor": color,
+                    "fillOpacity": fallback_opacity,
+                },
+                axis=1,
+            )
 
     # Remove excluded columns if specified
     if exclude_cols:
@@ -1086,10 +1164,20 @@ def save_all_to_geojson(
     exclude_cols: Optional[List[str]] = None,
     selection_type: Literal["old_selection", "new_selection"] = "old_selection",
     district_colors: Optional[Dict[str, str]] = None,
+    population_stats: Optional[dict] = None,
+    square_city_mapping: Optional[Dict[str, dict]] = None,
 ) -> None:
     """
     Generic batch saver for a dict of homogeneous GeoDataFrames
     (either all 'addresses' or all 'squares'). If `kind='auto'`, it infers from geometry.
+
+    Parameters
+    ----------
+    population_stats : dict, optional
+        City-level population statistics for opacity scaling
+    square_city_mapping : dict, optional
+        Nested dict mapping districts to their square-city mappings
+        Format: {district_name: {square_index: city_name}}
 
     Example:
         save_all_to_geojson(addresses_results_dict, kind="addresses")
@@ -1113,6 +1201,11 @@ def save_all_to_geojson(
             override_color = None
             if district_colors and key in district_colors:
                 override_color = district_colors[key]
+            
+            # Get district-specific square-city mapping if available
+            district_mapping = None
+            if square_city_mapping and key in square_city_mapping:
+                district_mapping = square_city_mapping[key]
 
             export_gdf_to_umap_geojson(
                 gdf,
@@ -1123,6 +1216,8 @@ def save_all_to_geojson(
                 exclude_cols=exclude_cols,
                 selection_type=selection_type,
                 override_color=override_color,
+                population_stats=population_stats,
+                square_city_mapping=district_mapping,
             )
         except Exception as e:
             logger.error(f"Error exporting {key} to {out_path}: {e}")
@@ -1799,6 +1894,263 @@ def calculate_city_means(rent_campaign_df: gpd.GeoDataFrame, krs_gdf: gpd.GeoDat
     
     logger.info(f"Calculated means for {len(city_means)} cities")
     return city_means
+
+
+def calculate_population_opacity(
+    population: float,
+    city_min: float,
+    city_max: float,
+    min_opacity: float = 0.1,
+    max_opacity: float = 0.6
+) -> float:
+    """
+    Calculate fillOpacity based on population density within city with automatic clipping.
+    
+    Parameters
+    ----------
+    population : float
+        Population count for this square
+    city_min : float
+        Minimum population in the city/Landkreis (or lower percentile if robust scaling)
+    city_max : float
+        Maximum population in the city/Landkreis (or upper percentile if robust scaling)
+    min_opacity : float
+        Minimum opacity for least populated squares (default: 0.1 = very faint)
+    max_opacity : float
+        Maximum opacity for most populated squares (default: 0.6 = bold)
+    
+    Returns
+    -------
+    float
+        Opacity value between min_opacity and max_opacity
+    
+    Examples
+    --------
+    >>> # Square with min population in city
+    >>> calculate_population_opacity(10, 10, 100, 0.1, 0.6)
+    0.1
+    
+    >>> # Square with max population in city
+    >>> calculate_population_opacity(100, 10, 100, 0.1, 0.6)
+    0.6
+    
+    >>> # Square with median population
+    >>> calculate_population_opacity(55, 10, 100, 0.1, 0.6)
+    0.35  # (55-10)/(100-10) = 0.5, so 0.1 + (0.5 * 0.5) = 0.35
+    """
+    # Handle edge cases - use max opacity for missing data
+    if pd.isna(population) or pd.isna(city_min) or pd.isna(city_max):
+        return max_opacity  # Fallback: full opacity ensures visibility
+    
+    if city_max == city_min:
+        # All squares have same population (or only one square)
+        return (min_opacity + max_opacity) / 2  # Use middle opacity
+    
+    # Clip population to [city_min, city_max] range
+    # This handles both outliers and values outside percentile bounds
+    clipped_pop = np.clip(population, city_min, city_max)
+    
+    # Min-max normalization on clipped value
+    normalized = (clipped_pop - city_min) / (city_max - city_min)
+    
+    # Safety clamp (should already be in [0,1] due to clipping)
+    normalized = max(0.0, min(1.0, normalized))
+    
+    # Map to opacity range
+    opacity = min_opacity + (normalized * (max_opacity - min_opacity))
+    
+    return opacity
+
+
+def calculate_city_population_stats(
+    rent_campaign_df: gpd.GeoDataFrame,
+    krs_gdf: gpd.GeoDataFrame,
+    population_column: str = "Einwohner",
+    use_robust_scaling: bool = True,
+    lower_percentile: float = 5,
+    upper_percentile: float = 95
+) -> dict:
+    """
+    Calculate population statistics for each city with optional outlier handling.
+    
+    This function identifies population ranges within each administrative
+    district to enable relative opacity scaling. Supports robust percentile-based
+    boundaries to handle outliers in both directions.
+    
+    Parameters
+    ----------
+    rent_campaign_df : gpd.GeoDataFrame
+        Full rent campaign data with all squares
+    krs_gdf : gpd.GeoDataFrame
+        City/Landkreis boundaries (e.g., VG250_KRS.shp)
+    population_column : str
+        Name of population column (default: "Einwohner")
+    use_robust_scaling : bool
+        If True, use percentile-based boundaries instead of min/max (default: True)
+    lower_percentile : float
+        Lower percentile for clipping (default: 5)
+    upper_percentile : float
+        Upper percentile for clipping (default: 95)
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping city names to population statistics:
+        {
+            "City Name": {
+                "min": float,        # Minimum (or lower percentile)
+                "max": float,        # Maximum (or upper percentile)
+                "p5": float,         # 5th percentile (if robust)
+                "p95": float,        # 95th percentile (if robust)
+                "actual_min": float, # Actual minimum (if robust)
+                "actual_max": float, # Actual maximum (if robust)
+                "count": int,        # Number of squares
+                "outliers_low": int, # Count of low outliers clipped (if robust)
+                "outliers_high": int # Count of high outliers clipped (if robust)
+            }
+        }
+    
+    Examples
+    --------
+    >>> stats = calculate_city_population_stats(rent_df, cities_df)
+    >>> stats["Essen"]
+    {'min': 10.0, 'max': 450.0, 'count': 1234, ...}
+    """
+    logger.info(f"Calculating population statistics for cities using column '{population_column}'")
+    
+    # Ensure same CRS
+    rent_campaign_proj = rent_campaign_df.to_crs(krs_gdf.crs)
+    
+    # Check if population column exists
+    if population_column not in rent_campaign_proj.columns:
+        logger.warning(f"Population column '{population_column}' not found. Available columns: {list(rent_campaign_proj.columns)}")
+        return {}
+    
+    city_stats = {}
+    
+    for idx, city_row in krs_gdf.iterrows():
+        city_name = city_row['GEN']
+        city_geom = city_row.geometry
+        
+        # Find squares within this city
+        city_squares = rent_campaign_proj[rent_campaign_proj.geometry.intersects(city_geom)]
+        
+        if not city_squares.empty:
+            # Get valid population values (exclude NaN)
+            pop_values = city_squares[population_column].dropna()
+            
+            if not pop_values.empty and len(pop_values) > 1:
+                if use_robust_scaling:
+                    # Use percentiles for robust boundaries
+                    p_lower = np.percentile(pop_values, lower_percentile)
+                    p_upper = np.percentile(pop_values, upper_percentile)
+                    
+                    city_stats[city_name] = {
+                        "min": float(p_lower),   # Robust lower boundary
+                        "max": float(p_upper),   # Robust upper boundary
+                        "p5": float(np.percentile(pop_values, 5)),
+                        "p95": float(np.percentile(pop_values, 95)),
+                        "actual_min": float(pop_values.min()),
+                        "actual_max": float(pop_values.max()),
+                        "count": len(pop_values),
+                        "outliers_low": int((pop_values < p_lower).sum()),
+                        "outliers_high": int((pop_values > p_upper).sum())
+                    }
+                    
+                    logger.debug(
+                        f"City {city_name}: robust range [{p_lower:.1f}, {p_upper:.1f}], "
+                        f"actual range [{pop_values.min():.1f}, {pop_values.max():.1f}], "
+                        f"outliers: {city_stats[city_name]['outliers_low']} low, "
+                        f"{city_stats[city_name]['outliers_high']} high"
+                    )
+                else:
+                    # Standard min-max
+                    city_stats[city_name] = {
+                        "min": float(pop_values.min()),
+                        "max": float(pop_values.max()),
+                        "count": len(pop_values)
+                    }
+                    logger.debug(f"City {city_name}: standard range [{pop_values.min():.1f}, {pop_values.max():.1f}], {len(pop_values)} squares")
+            elif len(pop_values) == 1:
+                # Only one square with population
+                single_val = float(pop_values.iloc[0])
+                city_stats[city_name] = {
+                    "min": single_val,
+                    "max": single_val,
+                    "count": 1
+                }
+                logger.debug(f"City {city_name}: single square with population {single_val}")
+            else:
+                logger.warning(f"No valid population data for city {city_name}")
+                city_stats[city_name] = {"min": None, "max": None, "count": 0}
+        else:
+            logger.warning(f"No squares found for city {city_name}")
+            city_stats[city_name] = {"min": None, "max": None, "count": 0}
+    
+    logger.info(f"Calculated population stats for {len(city_stats)} cities")
+    return city_stats
+
+
+def map_squares_to_cities(
+    results_dict: dict,
+    krs_gdf: gpd.GeoDataFrame
+) -> dict:
+    """
+    Create a mapping of each square to its containing city/Landkreis.
+    
+    Uses spatial join to determine which city each square belongs to.
+    
+    Parameters
+    ----------
+    results_dict : dict
+        Dictionary of district GeoDataFrames with squares
+    krs_gdf : gpd.GeoDataFrame
+        City/Landkreis boundaries
+    
+    Returns
+    -------
+    dict
+        Nested dictionary: {district_name: {square_index: city_name}}
+    
+    Examples
+    --------
+    >>> mapping = map_squares_to_cities(results_dict, krs_gdf)
+    >>> mapping["Oberhausen_117_htwk_hochburg"][0]
+    'Oberhausen'
+    """
+    logger.info("Mapping squares to cities for opacity scaling")
+    
+    square_city_mapping = {}
+    
+    for district_name, district_gdf in results_dict.items():
+        if district_gdf.empty:
+            square_city_mapping[district_name] = {}
+            continue
+        
+        # Ensure same CRS
+        district_proj = district_gdf.to_crs(krs_gdf.crs)
+        
+        # Spatial join to find which city each square is in
+        joined = gpd.sjoin(
+            district_proj,
+            krs_gdf[['GEN', 'geometry']],
+            how='left',
+            predicate='intersects'
+        )
+        
+        # Create mapping: index -> city name
+        district_mapping = {}
+        for idx, row in joined.iterrows():
+            city_name = row.get('GEN', None)
+            district_mapping[idx] = city_name
+        
+        square_city_mapping[district_name] = district_mapping
+        
+        # Log statistics
+        cities_found = set([c for c in district_mapping.values() if c is not None])
+        logger.debug(f"District {district_name}: {len(district_gdf)} squares mapped to {len(cities_found)} cities")
+    
+    return square_city_mapping
 
 
 def create_metric_card(value: float, group_mean: float, metric_id: str, metric_label: str) -> dict:

@@ -18,14 +18,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from params import (
     INPUT_FOLDER_PATH, BEZIRKE_FOLDER_PATH, OUTPUT_PATH_SQUARES, OUTPUT_PATH_ADDRESSES,
     LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS,
-    CONVERSATION_STARTERS, METRIC_CARD_CONFIG
+    CONVERSATION_STARTERS, METRIC_CARD_CONFIG, OPACITY_SCALING_CONFIG
 )
 from src.functions import (
     load_geojson_folder, gdf_dict_to_crs, get_rent_campaign_df,
     filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson,
     detect_wucher_miete, add_conversation_starters,
     load_city_boundaries, map_districts_to_cities, calculate_city_means,
-    add_metric_cards_to_districts
+    add_metric_cards_to_districts, calculate_city_population_stats, map_squares_to_cities
 )
 
 
@@ -438,8 +438,9 @@ def extract_addresses(results_dict: dict):
 
 def save_results(results_dict: dict, addresses_results_dict: dict, 
                 output_squares: str, output_addresses: str, selection_type: str = "old_selection",
-                district_colors: dict = None):
-    """Save analysis results to GeoJSON files."""
+                district_colors: dict = None, population_stats: dict = None, 
+                square_city_mapping: dict = None):
+    """Save analysis results to GeoJSON files with optional opacity scaling."""
     logging.info("Saving results to GeoJSON files")
     
     # Ensure output directories exist
@@ -486,14 +487,16 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
     # Define columns to exclude from final output
     exclude_columns = ['description', 'renter_flag', 'tooltip', 'flag_key']
     
-    # Save enhanced squares (excluding specified columns)
+    # Save enhanced squares (excluding specified columns) with opacity scaling
     save_all_to_geojson(
         enhanced_results_dict, 
         base_path=output_squares,
         kind="squares",
         exclude_cols=exclude_columns,
         selection_type=selection_type,
-        district_colors=district_colors
+        district_colors=district_colors,
+        population_stats=population_stats,
+        square_city_mapping=square_city_mapping
     )
     
     # Save enhanced addresses (excluding specified columns) only if addresses were extracted
@@ -555,6 +558,39 @@ def main() -> int:
         # Add metric cards to district results
         results_dict = add_metric_cards(results_dict, rent_campaign_df)
         
+        # Calculate population statistics for opacity scaling
+        population_stats = None
+        square_city_mapping = None
+        if OPACITY_SCALING_CONFIG.get("enabled", False):
+            krs_path = "data/cities/VG250_KRS.shp"
+            if Path(krs_path).exists():
+                logging.info(f"Loading city boundaries from {krs_path} for opacity scaling")
+                try:
+                    krs_gdf = gpd.read_file(krs_path)
+                    
+                    # Calculate population statistics per city
+                    population_stats = calculate_city_population_stats(
+                        rent_campaign_df, 
+                        krs_gdf,
+                        population_column=OPACITY_SCALING_CONFIG.get("population_column", "Einwohner"),
+                        use_robust_scaling=OPACITY_SCALING_CONFIG.get("use_robust_scaling", True),
+                        lower_percentile=OPACITY_SCALING_CONFIG.get("lower_percentile", 5),
+                        upper_percentile=OPACITY_SCALING_CONFIG.get("upper_percentile", 95)
+                    )
+                    
+                    # Map squares to cities
+                    square_city_mapping = map_squares_to_cities(results_dict, krs_gdf)
+                    
+                    logging.info(f"Opacity scaling enabled: {len(population_stats)} cities, {len(square_city_mapping)} districts mapped")
+                except Exception as e:
+                    logging.warning(f"Failed to calculate opacity scaling data: {e}. Using fallback opacity.")
+                    population_stats = None
+                    square_city_mapping = None
+            else:
+                logging.warning(f"City boundaries not found at {krs_path}. Opacity scaling disabled.")
+        else:
+            logging.info("Opacity scaling disabled in config")
+        
         # Extract addresses (optional)
         if args.skip_addresses:
             logging.info("Skipping address extraction (--skip-addresses flag set)")
@@ -562,12 +598,14 @@ def main() -> int:
         else:
             addresses_results_dict = extract_addresses(results_dict)
         
-        # Save results
+        # Save results with opacity scaling
         save_results(
             results_dict, addresses_results_dict,
             args.output_squares, args.output_addresses,
             selection_type=args.selection_type,
-            district_colors=district_colors
+            district_colors=district_colors,
+            population_stats=population_stats,
+            square_city_mapping=square_city_mapping
         )
         
         logging.info("Pipeline completed successfully")
