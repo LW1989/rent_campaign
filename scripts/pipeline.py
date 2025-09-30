@@ -89,6 +89,14 @@ Examples:
         help="Skip address extraction (fastest, only generates squares)"
     )
     
+    parser.add_argument(
+        "--selection-type",
+        type=str,
+        choices=["old_selection", "new_selection"],
+        default="old_selection",
+        help="Data selection type for color coding (old_selection=red, new_selection=grey)"
+    )
+    
     
     return parser.parse_args()
 
@@ -428,7 +436,7 @@ def extract_addresses(results_dict: dict):
 
 
 def save_results(results_dict: dict, addresses_results_dict: dict, 
-                output_squares: str, output_addresses: str):
+                output_squares: str, output_addresses: str, selection_type: str = "old_selection"):
     """Save analysis results to GeoJSON files."""
     logging.info("Saving results to GeoJSON files")
     
@@ -481,7 +489,8 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
         enhanced_results_dict, 
         base_path=output_squares,
         kind="squares",
-        exclude_cols=exclude_columns
+        exclude_cols=exclude_columns,
+        selection_type=selection_type
     )
     
     # Save enhanced addresses (excluding specified columns) only if addresses were extracted
@@ -490,7 +499,8 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
             enhanced_addresses_results_dict,
             base_path=output_addresses,
             kind="addresses",
-            exclude_cols=exclude_columns
+            exclude_cols=exclude_columns,
+            selection_type=selection_type
         )
         logging.info(f"Results saved to {output_squares} and {output_addresses}")
     else:
@@ -551,7 +561,8 @@ def main() -> int:
         # Save results
         save_results(
             results_dict, addresses_results_dict,
-            args.output_squares, args.output_addresses
+            args.output_squares, args.output_addresses,
+            selection_type=args.selection_type
         )
         
         logging.info("Pipeline completed successfully")
