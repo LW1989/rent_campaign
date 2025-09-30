@@ -941,6 +941,7 @@ def export_gdf_to_umap_geojson(
     feature_type: Literal["auto", "addresses", "squares"] = "auto",
     title_col: str = "district_name",
     exclude_cols: Optional[List[str]] = None,
+    color: Optional[str] = None,
 ) -> str:
     """
     Generic exporter for uMap-ready GeoJSON.
@@ -959,6 +960,9 @@ def export_gdf_to_umap_geojson(
     name_cols : columns to build 'name' for addresses (points)
     feature_type : force behavior ("addresses" or "squares") or "auto" to infer from geometry
     title_col : column used as title (e.g., "district_name")
+    color : hex color for uMap styling (auto-detects based on district naming pattern if None)
+            - Numeric names (e.g., "16.0") → grey #9e9e9e (city-level data)
+            - Text names (e.g., "Stimmbezirk 3105") → red #e74c3c (voting districts)
     """
     if gdf.empty:
         raise ValueError("Input GeoDataFrame is empty.")
@@ -971,6 +975,19 @@ def export_gdf_to_umap_geojson(
     inferred = _geom_kind(gdf)
     if feature_type == "auto":
         feature_type = "addresses" if inferred == "point" else "squares"
+    
+    # Auto-detect color based on district naming pattern if not provided
+    if color is None:
+        # Check if this is city-level data (numeric names) vs voting districts (text names)
+        if title_col in gdf.columns and not gdf[title_col].empty:
+            sample_name = str(gdf[title_col].iloc[0])
+            # Numeric pattern like "16.0" or "39.0" = new city-level data
+            if re.match(r'^\d+\.?\d*$', sample_name):
+                color = "#9e9e9e"  # Medium light grey for city-level data
+            else:
+                color = "#e74c3c"  # Red for voting districts (traditional)
+        else:
+            color = "#e74c3c"  # Default to red
 
     # Build 'name'
     if feature_type == "addresses":
@@ -1007,7 +1024,7 @@ def export_gdf_to_umap_geojson(
         gdf["_umap_options"] = gdf.apply(
             lambda _: {
                 "iconClass": "Circle",     # e.g. "Circle", "Drop", "Ball"
-                "color": "#e74c3c",        # marker/outline color
+                "color": color,            # marker/outline color
                 # more options possible: "fillColor", "opacity", "weight", etc.
             },
             axis=1,
@@ -1016,10 +1033,10 @@ def export_gdf_to_umap_geojson(
         # polygon style: stroke + fill
         gdf["_umap_options"] = gdf.apply(
             lambda _: {
-                "color": "#e74c3c",        # stroke color
+                "color": color,            # stroke color
                 "weight": 2,               # stroke width
                 "opacity": 0.9,            # stroke opacity
-                "fillColor": "#e74c3c",    # fill color
+                "fillColor": color,        # fill color
                 "fillOpacity": 0.15,       # fill opacity for visibility
             },
             axis=1,
