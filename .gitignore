@@ -204,3 +204,6 @@ Icon*
 data/rent_campagne/not needed/
 output/all_districts/
 Icon?
+
+# Update input data directory - contains district selections
+data/update_input_data/

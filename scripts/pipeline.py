@@ -313,43 +313,38 @@ def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
         
         # Prepare rent data for joining (add rent column to all rent squares)
         rent_col = WUCHER_DETECTION_PARAMS['rent_column']
-        rent_for_join = rent_gdf[[rent_col, 'geometry']].copy()
         
         # First: LEFT JOIN rent campaign with rent data to get rent values
         logging.info("Joining rent campaign data with rent information")
-        # Use spatial join to match squares
-        campaign_with_rent = rent_campaign_df.sjoin(
-            rent_for_join, 
-            how='left', 
-            predicate='intersects'
+        # Use attribute-based merge on GITTER_ID_100m for exact matching (no spatial ambiguity)
+        if 'GITTER_ID_100m' not in rent_gdf.columns:
+            logging.error("GITTER_ID_100m not found in rent data - cannot perform exact join")
+            rent_campaign_df['wucher_miete_flag'] = False
+            rent_campaign_df[rent_col] = None
+            return rent_campaign_df
+        
+        rent_for_join = rent_gdf[['GITTER_ID_100m', rent_col]].copy()
+        campaign_with_rent = rent_campaign_df.merge(
+            rent_for_join,
+            on='GITTER_ID_100m',
+            how='left'
         )
-        
-        # Clean up join artifacts and handle duplicates
-        if 'index_right' in campaign_with_rent.columns:
-            campaign_with_rent = campaign_with_rent.drop('index_right', axis=1)
-        
-        # Remove duplicates keeping first match
-        campaign_with_rent = campaign_with_rent.drop_duplicates(subset=['geometry'])
         
         # Second: LEFT JOIN with Wucher outliers to add wucher flags
         if len(wucher_outliers) > 0:
             logging.info("Joining with Wucher Miete outliers")
-            # Prepare outliers for join (only need flag and geometry)
-            outliers_for_join = wucher_outliers[['wucher_miete_flag', 'geometry']].copy()
-            
-            # Spatial join with outliers
-            final_result = campaign_with_rent.sjoin(
-                outliers_for_join,
-                how='left',
-                predicate='intersects'
-            )
-            
-            # Clean up join artifacts
-            if 'index_right' in final_result.columns:
-                final_result = final_result.drop('index_right', axis=1)
-            
-            # Remove duplicates
-            final_result = final_result.drop_duplicates(subset=['geometry'])
+            # Use attribute-based merge on GITTER_ID_100m for exact matching (no spatial ambiguity)
+            if 'GITTER_ID_100m' not in wucher_outliers.columns:
+                logging.error("GITTER_ID_100m not found in wucher outliers - cannot perform exact join")
+                campaign_with_rent['wucher_miete_flag'] = False
+                final_result = campaign_with_rent.copy()
+            else:
+                outliers_for_join = wucher_outliers[['GITTER_ID_100m', 'wucher_miete_flag']].copy()
+                final_result = campaign_with_rent.merge(
+                    outliers_for_join,
+                    on='GITTER_ID_100m',
+                    how='left'
+                )
         else:
             final_result = campaign_with_rent.copy()
     
