@@ -694,7 +694,7 @@ def get_rent_campaign_df(
     rent_campaign_df = rent_campaign_df.drop(columns=heating_typeshare_list + energy_type_share_list)
 
     # Include GITTER_ID_100m if it exists, otherwise just return geometry and other columns
-    base_cols = ["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "heating_pie", "energy_pie"]
+    base_cols = ["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "renter_share", "heating_pie", "energy_pie"]
     if "GITTER_ID_100m" in rent_campaign_df.columns:
         base_cols.insert(1, "GITTER_ID_100m")
     

@@ -82,6 +82,10 @@ METRIC_CARD_CONFIG = {
         "id": "rent_per_m2",
         "label": "Miete €/m²"
     },
+    "renter_share": {
+        "id": "renter_share",
+        "label": "Mieterquote"
+    },
     "AnteilUeber65": {
         "id": "elderly_share",
         "label": "Anteil über 65"
