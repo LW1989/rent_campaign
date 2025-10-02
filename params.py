@@ -23,8 +23,9 @@ CRS = "EPSG:3035"
 THRESHOLD_PARAMS = {
     "central_heating_thres": 0.6,
     "fossil_heating_thres": 0.6, 
-    "fernwaerme_thres": 0.2,
-    "renter_share": 0.6
+    "fernwaerme_thres": 0.8,
+    "renter_share": 0.6,
+    "etagenheizung_thres": 0.6
 }
 
 # Spatial analysis parameters
@@ -51,7 +52,7 @@ DEMOGRAPHICS_DATASETS = {
 
 # Overpass API configuration
 OVERPASS_CONFIG = {
-    "timeout": 180,
+    "timeout": 60,
     "retries": 4
 }
 
@@ -68,10 +69,22 @@ PREPROCESS_PARAMS = {
 # Wucher Miete (rent gouging) detection parameters
 WUCHER_DETECTION_PARAMS = {
     "method": "median",          # 'mean' or 'median' for neighbor statistic
-    "threshold": 3,            # Number of standard deviations above neighbor median/mean
-    "neighborhood_size": 11,      # Size of neighborhood (must be odd: 3, 5, 7, etc.)
+    "threshold": 2,            # Number of standard deviations above neighbor median/mean
+    "neighborhood_size": 21,      # Size of neighborhood (must be odd: 3, 5, 7, etc.)
+                                 # Each square is 100m×100m, so:
+                                 # - neighborhood_size=11 → 500m radius (1.1km × 1.1km total)
+                                 # - neighborhood_size=21 → 1km radius (2.1km × 2.1km total)
+                                 # - neighborhood_size=41 → 2km radius (4.1km × 4.1km total)
+                                 # Formula: radius = (neighborhood_size-1)/2 × 100m
     "min_rent_threshold": 8.0,   # Minimum rent per sqm to consider (filter out very low rents)
-    "min_neighbors": 30,          # Minimum number of neighbors required for comparison
+    "min_neighbors": 110,          # Minimum number of neighbors required for comparison
+                                 # Recommended values for different neighborhood sizes:
+                                 # neighborhood_size | Total Neighbors | 20%  | 25% (current) | 30%
+                                 # ----------------- | --------------- | ---- | ------------- | ----
+                                 # 11 (500m)         | 120             | 24   | 30            | 36
+                                 # 21 (1km)          | 440             | 88   | 110           | 132
+                                 # 41 (2km)          | 1,680           | 336  | 420           | 504
+                                 # Formula: min_neighbors = (neighborhood_size² - 1) × percentage
     "rent_column": "durchschnMieteQM"  # Column name for rent per square meter
 }
 

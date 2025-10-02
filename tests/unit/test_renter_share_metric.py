@@ -101,7 +101,8 @@ class TestRenterShareInRentCampaignDf:
                 'central_heating_thres': 0.6,
                 'fossil_heating_thres': 0.6,
                 'fernwaerme_thres': 0.2,
-                'renter_share': 0.6
+                'renter_share': 0.6,
+                'etagenheizung_thres': 0.6
             }
         )
         
@@ -181,7 +182,8 @@ class TestRenterShareInRentCampaignDf:
                 'central_heating_thres': 0.6,
                 'fossil_heating_thres': 0.6,
                 'fernwaerme_thres': 0.2,
-                'renter_share': 0.6
+                'renter_share': 0.6,
+                'etagenheizung_thres': 0.6
             }
         )
         
@@ -262,7 +264,8 @@ class TestRenterShareInRentCampaignDf:
                 'central_heating_thres': 0.6,
                 'fossil_heating_thres': 0.6,
                 'fernwaerme_thres': 0.2,
-                'renter_share': 0.6
+                'renter_share': 0.6,
+                'etagenheizung_thres': 0.6
             }
         )
         

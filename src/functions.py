@@ -626,7 +626,8 @@ def calc_rent_campaign_flags(
             "central_heating_thres":0.6,
             "fossil_heating_thres":0.6,
             "fernwaerme_thres":0.2,
-            "renter_share":0.6
+            "renter_share":0.6,
+            "etagenheizung_thres":0.6
             }
             ):
 
@@ -634,6 +635,7 @@ def calc_rent_campaign_flags(
     rent_campaign_df["fossil_heating_flag"] = rent_campaign_df["fossil_heating_share"] > threshold_dict["fossil_heating_thres"]
     rent_campaign_df["fernwaerme_flag"] = rent_campaign_df["fernwaerme_share"] > threshold_dict["fernwaerme_thres"]
     rent_campaign_df["renter_flag"] = rent_campaign_df["renter_share"] > threshold_dict["renter_share"]
+    rent_campaign_df["etagenheizung_flag"] = rent_campaign_df["Etagenheizung_share"] > threshold_dict["etagenheizung_thres"]
 
     rent_campaign_df=rent_campaign_df[rent_campaign_df["renter_flag"]==True]
 
@@ -654,7 +656,8 @@ def get_rent_campaign_df(
             "central_heating_thres":0.6,
             "fossil_heating_thres":0.6,
             "fernwaerme_thres":0.2,
-            "renter_share":0.6
+            "renter_share":0.6,
+            "etagenheizung_thres":0.6
             }
 
     logger.debug(f"Running get_heating_type with heating_type shape: {heating_type.shape}")
@@ -694,7 +697,7 @@ def get_rent_campaign_df(
     rent_campaign_df = rent_campaign_df.drop(columns=heating_typeshare_list + energy_type_share_list)
 
     # Include GITTER_ID_100m if it exists, otherwise just return geometry and other columns
-    base_cols = ["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "renter_share", "heating_pie", "energy_pie"]
+    base_cols = ["geometry", "central_heating_flag", "fossil_heating_flag", "fernwaerme_flag", "renter_flag", "etagenheizung_flag", "renter_share", "heating_pie", "energy_pie"]
     if "GITTER_ID_100m" in rent_campaign_df.columns:
         base_cols.insert(1, "GITTER_ID_100m")
     

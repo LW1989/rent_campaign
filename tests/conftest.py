@@ -95,7 +95,8 @@ def sample_threshold_dict():
         "central_heating_thres": 0.4,
         "fossil_heating_thres": 0.4,
         "fernwaerme_thres": 0.1,
-        "renter_share": 0.5
+        "renter_share": 0.5,
+        "etagenheizung_thres": 0.6
     }
 
 
