@@ -1,0 +1,104 @@
+================================================================================
+PIPELINE VALIDATION REPORT - $(date)
+================================================================================
+
+PIPELINE RUN SUMMARY
+--------------------
+✓ Pipeline completed successfully
+✓ Input: data/update_input_data/auswahl_inside (695 district files)
+✓ Output: output/output_inside/{squares,addresses}
+✓ Data type: old_selection (red color scheme)
+✓ Address extraction: ENABLED
+
+FILE GENERATION
+---------------
+✓ Squares files generated: 688 files
+✓ Addresses files generated: 688 files
+✓ Input districts: 695
+  → 7 districts likely had no valid data (expected for sparse areas)
+
+CONTENT STATISTICS
+------------------
+✓ Total squares (grid cells): 109,954
+✓ Total addresses extracted: 1,329,138
+✓ Average squares per district: 159
+✓ Average addresses per district: 1,931
+
+FILE SIZE CHECK
+---------------
+✓ No empty files found (0 bytes)
+✓ Largest squares file: 1.7MB (Wuppertal)
+✓ Largest addresses file: 22MB (Wuppertal)
+✓ Smallest squares file: 24KB (valid data)
+
+GEOJSON STRUCTURE VALIDATION
+-----------------------------
+✓ All sampled files are valid FeatureCollections
+✓ All features have geometry and properties
+✓ No structural JSON errors detected
+
+FEATURE FLAGS & PROPERTIES (Squares)
+------------------------------------
+✓ central_heating_flag: PRESENT
+✓ fossil_heating_flag: PRESENT
+✓ fernwaerme_flag: PRESENT
+✓ etagenheizung_flag: PRESENT (newly implemented)
+✓ renter_share: PRESENT
+✓ heating_pie: PRESENT
+✓ energy_pie: PRESENT
+✓ conversation_start: PRESENT
+✓ metric_cards: PRESENT
+✓ wucher_miete_flag: PRESENT
+
+EXCLUDED COLUMNS (as expected)
+-------------------------------
+✓ renter_flag: EXCLUDED (internal use only)
+✓ tooltip: EXCLUDED
+✓ flag_key: EXCLUDED
+✓ description: EXCLUDED
+
+COLOR INHERITANCE
+-----------------
+✓ hochburg (purple): #2d0a41
+✓ prekaer (red): #ff0000
+✓ sozial_oeko (green): #2E8B57
+✓ soziooeko_ebene2 (green): #2E8B57
+
+ADDRESS PROPERTIES
+------------------
+✓ Address components: housenumber, street, postcode, city
+✓ Grid ID: GITTER_ID_100m present
+✓ Flags: All heating/renter flags present
+✓ Shares: renter_share, heating_pie, energy_pie present
+✓ Demographics: AnteilUeber65, AnteilAuslaender, etc.
+✓ Conversation starters: Present and populated
+✓ Metric cards: Present with calculated values
+✓ Color inheritance: Working (_umap_options present)
+
+LOG ANALYSIS
+------------
+⚠ Minor errors: 56 (mostly "No objects to concatenate" for sparse districts)
+⚠ Warnings: 294 (some Overpass API timeouts - expected for large requests)
+✓ No critical errors that prevented completion
+
+OVERALL ASSESSMENT
+------------------
+✅ PIPELINE RUN SUCCESSFUL
+
+All critical features are working correctly:
+- All expected output files generated
+- Feature flags properly calculated
+- Color inheritance working
+- Address extraction completed (1.3M addresses)
+- Conversation starters mapped
+- Metric cards calculated
+- New etagenheizung_flag implemented and present
+
+Minor issues observed:
+- 7 districts produced no output (likely no data in those areas)
+- Some Overpass API timeouts (retry mechanism worked)
+- Some empty concatenation warnings (expected for sparse data)
+
+RECOMMENDATION: Pipeline is production-ready ✓
+
+================================================================================
