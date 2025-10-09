@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.functions import (
     calc_total, get_heating_type, get_energy_type, get_renter_share,
     gitter_id_to_polygon, convert_to_float, drop_cols, create_geodataframe,
-    process_demographics, save_geodataframe
+    process_demographics, save_geodataframe, filter_squares_invoting_distirct,
+    export_gdf_to_umap_geojson
 )
 
 
@@ -726,3 +727,185 @@ class TestDemographicsProcessing:
             assert 'value1' in result.columns
             assert 'value2' in result.columns
             assert 'GITTER_ID_100m' in result.columns
+
+
+@pytest.mark.unit
+@pytest.mark.fast
+class TestColorInheritance:
+    """Test color inheritance from input districts."""
+    
+    def test_color_extraction_from_district(self):
+        """Test that colors are extracted from _umap_options in district GeoDataFrames."""
+        import json
+        
+        # Create test district with color
+        district_gdf = gpd.GeoDataFrame({
+            'name': ['BTW 2017 | Test District | Linke 15%'],
+            '_umap_options': [json.dumps({
+                'color': '#000000',
+                'fillColor': '#ff0000',
+                'fillOpacity': '0.65'
+            })],
+            'geometry': [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        }, crs='EPSG:4326')
+        
+        # Extract color
+        umap_opts = district_gdf['_umap_options'].iloc[0]
+        if isinstance(umap_opts, str):
+            umap_opts = json.loads(umap_opts)
+        color = umap_opts.get('fillColor')
+        
+        assert color == '#ff0000'
+    
+    def test_filter_squares_returns_color_dict(self):
+        """Test that filter_squares_invoting_distirct returns both results and colors."""
+        import json
+        
+        # Create test district with color
+        bezirke_dict = {
+            'test_district': gpd.GeoDataFrame({
+                'name': ['BTW 2017 | Test District | Linke 15%'],
+                '_umap_options': [json.dumps({
+                    'fillColor': '#2d0a41'
+                })],
+                'geometry': [Polygon([(0, 0), (0.1, 0), (0.1, 0.1), (0, 0.1)])]
+            }, crs='EPSG:4326')
+        }
+        
+        # Create simple rent campaign data
+        rent_campaign_df = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['test1', 'test2'],
+            'geometry': [
+                Polygon([(0, 0), (0.05, 0), (0.05, 0.05), (0, 0.05)]),
+                Polygon([(0.05, 0.05), (0.1, 0.05), (0.1, 0.1), (0.05, 0.1)])
+            ]
+        }, crs='EPSG:4326')
+        
+        # Call function
+        results_dict, color_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
+        
+        # Verify both returns
+        assert isinstance(results_dict, dict)
+        assert isinstance(color_dict, dict)
+        assert 'test_district' in color_dict
+        assert color_dict['test_district'] == '#2d0a41'
+    
+    def test_color_dict_with_missing_umap_options(self):
+        """Test that color_dict handles districts without _umap_options."""
+        # Create test district WITHOUT color
+        bezirke_dict = {
+            'test_district': gpd.GeoDataFrame({
+                'name': ['Test District'],
+                'geometry': [Polygon([(0, 0), (0.1, 0), (0.1, 0.1), (0, 0.1)])]
+            }, crs='EPSG:4326')
+        }
+        
+        rent_campaign_df = gpd.GeoDataFrame({
+            'GITTER_ID_100m': ['test1'],
+            'geometry': [Polygon([(0, 0), (0.05, 0), (0.05, 0.05), (0, 0.05)])]
+        }, crs='EPSG:4326')
+        
+        # Call function
+        results_dict, color_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
+        
+        # Verify color is None for district without _umap_options
+        assert 'test_district' in color_dict
+        assert color_dict['test_district'] is None
+    
+    def test_export_with_override_color_old_selection(self):
+        """Test that override_color is used for old_selection."""
+        import tempfile
+        import json
+        
+        # Create test GeoDataFrame
+        test_gdf = gpd.GeoDataFrame({
+            'district_name': ['Test District'],
+            'GITTER_ID_100m': ['test1'],
+            'central_heating_flag': [True],
+            'fossil_heating_flag': [False],
+            'fernwaerme_flag': [False],
+            'geometry': [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        }, crs='EPSG:4326')
+        
+        # Export with override color
+        with tempfile.NamedTemporaryFile(suffix='.geojson', delete=False) as tmp:
+            export_gdf_to_umap_geojson(
+                test_gdf,
+                tmp.name,
+                feature_type='squares',
+                selection_type='old_selection',
+                override_color='#2d0a41'  # Purple
+            )
+            
+            # Read back and verify color
+            result = gpd.read_file(tmp.name)
+            umap_opts = result['_umap_options'].iloc[0]
+            if isinstance(umap_opts, str):
+                umap_opts = json.loads(umap_opts)
+            
+            assert umap_opts['fillColor'] == '#2d0a41'
+            assert umap_opts['color'] == '#2d0a41'
+    
+    def test_export_without_override_color_uses_default(self):
+        """Test that default color is used when no override provided."""
+        import tempfile
+        import json
+        
+        test_gdf = gpd.GeoDataFrame({
+            'district_name': ['Test District'],
+            'GITTER_ID_100m': ['test1'],
+            'central_heating_flag': [True],
+            'fossil_heating_flag': [False],
+            'fernwaerme_flag': [False],
+            'geometry': [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        }, crs='EPSG:4326')
+        
+        # Export WITHOUT override color
+        with tempfile.NamedTemporaryFile(suffix='.geojson', delete=False) as tmp:
+            export_gdf_to_umap_geojson(
+                test_gdf,
+                tmp.name,
+                feature_type='squares',
+                selection_type='old_selection',
+                override_color=None
+            )
+            
+            # Read back and verify default red color
+            result = gpd.read_file(tmp.name)
+            umap_opts = result['_umap_options'].iloc[0]
+            if isinstance(umap_opts, str):
+                umap_opts = json.loads(umap_opts)
+            
+            assert umap_opts['fillColor'] == '#e74c3c'  # Default red
+    
+    def test_export_new_selection_ignores_override_color(self):
+        """Test that new_selection ignores override_color and uses grey."""
+        import tempfile
+        import json
+        
+        test_gdf = gpd.GeoDataFrame({
+            'district_name': ['16.0'],
+            'GITTER_ID_100m': ['test1'],
+            'central_heating_flag': [True],
+            'fossil_heating_flag': [False],
+            'fernwaerme_flag': [False],
+            'geometry': [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        }, crs='EPSG:4326')
+        
+        # Export with override color but new_selection type
+        with tempfile.NamedTemporaryFile(suffix='.geojson', delete=False) as tmp:
+            export_gdf_to_umap_geojson(
+                test_gdf,
+                tmp.name,
+                feature_type='squares',
+                selection_type='new_selection',
+                override_color='#ff0000'  # Should be ignored
+            )
+            
+            # Read back and verify grey is used (not red)
+            result = gpd.read_file(tmp.name)
+            umap_opts = result['_umap_options'].iloc[0]
+            if isinstance(umap_opts, str):
+                umap_opts = json.loads(umap_opts)
+            
+            assert umap_opts['fillColor'] == '#9e9e9e'  # Grey, not red

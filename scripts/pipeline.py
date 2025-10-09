@@ -18,14 +18,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from params import (
     INPUT_FOLDER_PATH, BEZIRKE_FOLDER_PATH, OUTPUT_PATH_SQUARES, OUTPUT_PATH_ADDRESSES,
     LOG_LEVEL, CRS, THRESHOLD_PARAMS, DATASET_NAMES, WUCHER_DETECTION_PARAMS,
-    CONVERSATION_STARTERS, METRIC_CARD_CONFIG
+    CONVERSATION_STARTERS, METRIC_CARD_CONFIG, OPACITY_SCALING_CONFIG
 )
 from src.functions import (
     load_geojson_folder, gdf_dict_to_crs, get_rent_campaign_df,
     filter_squares_invoting_distirct, get_all_addresses, save_all_to_geojson,
     detect_wucher_miete, add_conversation_starters,
     load_city_boundaries, map_districts_to_cities, calculate_city_means,
-    add_metric_cards_to_districts
+    add_metric_cards_to_districts, calculate_city_population_stats, map_squares_to_cities
 )
 
 
@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
 Examples:
   python scripts/pipeline.py
   python scripts/pipeline.py --input-folder /path/to/data --output-squares /path/to/squares/
+  python scripts/pipeline.py --bezirke-folder data/auswahl_theo --skip-addresses  # Fast mode: squares only
         """
     )
     
@@ -80,6 +81,20 @@ Examples:
         type=str,
         default=OUTPUT_PATH_ADDRESSES,
         help=f"Output path for addresses GeoJSON files (default: {OUTPUT_PATH_ADDRESSES})"
+    )
+    
+    parser.add_argument(
+        "--skip-addresses",
+        action="store_true",
+        help="Skip address extraction (fastest, only generates squares)"
+    )
+    
+    parser.add_argument(
+        "--selection-type",
+        type=str,
+        choices=["old_selection", "new_selection"],
+        default="old_selection",
+        help="Data selection type for color coding (old_selection=red, new_selection=grey)"
     )
     
     
@@ -298,43 +313,38 @@ def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
         
         # Prepare rent data for joining (add rent column to all rent squares)
         rent_col = WUCHER_DETECTION_PARAMS['rent_column']
-        rent_for_join = rent_gdf[[rent_col, 'geometry']].copy()
         
         # First: LEFT JOIN rent campaign with rent data to get rent values
         logging.info("Joining rent campaign data with rent information")
-        # Use spatial join to match squares
-        campaign_with_rent = rent_campaign_df.sjoin(
-            rent_for_join, 
-            how='left', 
-            predicate='intersects'
+        # Use attribute-based merge on GITTER_ID_100m for exact matching (no spatial ambiguity)
+        if 'GITTER_ID_100m' not in rent_gdf.columns:
+            logging.error("GITTER_ID_100m not found in rent data - cannot perform exact join")
+            rent_campaign_df['wucher_miete_flag'] = False
+            rent_campaign_df[rent_col] = None
+            return rent_campaign_df
+        
+        rent_for_join = rent_gdf[['GITTER_ID_100m', rent_col]].copy()
+        campaign_with_rent = rent_campaign_df.merge(
+            rent_for_join,
+            on='GITTER_ID_100m',
+            how='left'
         )
-        
-        # Clean up join artifacts and handle duplicates
-        if 'index_right' in campaign_with_rent.columns:
-            campaign_with_rent = campaign_with_rent.drop('index_right', axis=1)
-        
-        # Remove duplicates keeping first match
-        campaign_with_rent = campaign_with_rent.drop_duplicates(subset=['geometry'])
         
         # Second: LEFT JOIN with Wucher outliers to add wucher flags
         if len(wucher_outliers) > 0:
             logging.info("Joining with Wucher Miete outliers")
-            # Prepare outliers for join (only need flag and geometry)
-            outliers_for_join = wucher_outliers[['wucher_miete_flag', 'geometry']].copy()
-            
-            # Spatial join with outliers
-            final_result = campaign_with_rent.sjoin(
-                outliers_for_join,
-                how='left',
-                predicate='intersects'
-            )
-            
-            # Clean up join artifacts
-            if 'index_right' in final_result.columns:
-                final_result = final_result.drop('index_right', axis=1)
-            
-            # Remove duplicates
-            final_result = final_result.drop_duplicates(subset=['geometry'])
+            # Use attribute-based merge on GITTER_ID_100m for exact matching (no spatial ambiguity)
+            if 'GITTER_ID_100m' not in wucher_outliers.columns:
+                logging.error("GITTER_ID_100m not found in wucher outliers - cannot perform exact join")
+                campaign_with_rent['wucher_miete_flag'] = False
+                final_result = campaign_with_rent.copy()
+            else:
+                outliers_for_join = wucher_outliers[['GITTER_ID_100m', 'wucher_miete_flag']].copy()
+                final_result = campaign_with_rent.merge(
+                    outliers_for_join,
+                    on='GITTER_ID_100m',
+                    how='left'
+                )
         else:
             final_result = campaign_with_rent.copy()
     
@@ -366,15 +376,16 @@ def integrate_wucher_detection(rent_campaign_df, loading_dict: dict):
 
 
 def filter_by_districts(bezirke_dict: dict, rent_campaign_df):
-    """Filter squares by voting districts."""
+    """Filter squares by voting districts and extract colors."""
     logging.info("Filtering squares by voting districts")
     
-    results_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
+    results_dict, color_dict = filter_squares_invoting_distirct(bezirke_dict, rent_campaign_df)
     
     total_squares = sum(len(gdf) for gdf in results_dict.values())
     logging.info(f"Filtered results: {len(results_dict)} districts, {total_squares} total squares")
+    logging.info(f"Extracted colors for {len([c for c in color_dict.values() if c])} districts")
     
-    return results_dict
+    return results_dict, color_dict
 
 
 def add_metric_cards(results_dict: dict, rent_campaign_df):
@@ -421,8 +432,10 @@ def extract_addresses(results_dict: dict):
 
 
 def save_results(results_dict: dict, addresses_results_dict: dict, 
-                output_squares: str, output_addresses: str):
-    """Save analysis results to GeoJSON files."""
+                output_squares: str, output_addresses: str, selection_type: str = "old_selection",
+                district_colors: dict = None, population_stats: dict = None, 
+                square_city_mapping: dict = None):
+    """Save analysis results to GeoJSON files with optional opacity scaling."""
     logging.info("Saving results to GeoJSON files")
     
     # Ensure output directories exist
@@ -446,43 +459,54 @@ def save_results(results_dict: dict, addresses_results_dict: dict,
             enhanced_results_dict[district_name] = gdf  # Keep original data
             continue
     
-    # Add conversation starters to addresses before saving
-    logging.info("Adding conversation starters to addresses")
+    # Add conversation starters to addresses before saving (if addresses were extracted)
     enhanced_addresses_results_dict = {}
-    for district_name, gdf in addresses_results_dict.items():
-        try:
-            if gdf.empty:
-                logging.warning(f"Skipping empty addresses for district {district_name}")
-                enhanced_addresses_results_dict[district_name] = gdf
+    if addresses_results_dict:
+        logging.info("Adding conversation starters to addresses")
+        for district_name, gdf in addresses_results_dict.items():
+            try:
+                if gdf.empty:
+                    logging.warning(f"Skipping empty addresses for district {district_name}")
+                    enhanced_addresses_results_dict[district_name] = gdf
+                    continue
+                enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
+                enhanced_addresses_results_dict[district_name] = enhanced_gdf
+                logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
+            except Exception as e:
+                logging.error(f"Failed to add conversation starters to addresses for district {district_name}: {e}")
+                enhanced_addresses_results_dict[district_name] = gdf  # Keep original data
                 continue
-            enhanced_gdf = add_conversation_starters(gdf, CONVERSATION_STARTERS)
-            enhanced_addresses_results_dict[district_name] = enhanced_gdf
-            logging.debug(f"Added conversation starters to {district_name}: {len(enhanced_gdf)} addresses")
-        except Exception as e:
-            logging.error(f"Failed to add conversation starters to addresses for district {district_name}: {e}")
-            enhanced_addresses_results_dict[district_name] = gdf  # Keep original data
-            continue
+    else:
+        logging.info("Skipping address export (no addresses extracted)")
     
     # Define columns to exclude from final output
     exclude_columns = ['description', 'renter_flag', 'tooltip', 'flag_key']
     
-    # Save enhanced squares (excluding specified columns)
+    # Save enhanced squares (excluding specified columns) with opacity scaling
     save_all_to_geojson(
         enhanced_results_dict, 
         base_path=output_squares,
         kind="squares",
-        exclude_cols=exclude_columns
+        exclude_cols=exclude_columns,
+        selection_type=selection_type,
+        district_colors=district_colors,
+        population_stats=population_stats,
+        square_city_mapping=square_city_mapping
     )
     
-    # Save enhanced addresses (excluding specified columns)
-    save_all_to_geojson(
-        enhanced_addresses_results_dict,
-        base_path=output_addresses,
-        kind="addresses",
-        exclude_cols=exclude_columns
-    )
-    
-    logging.info(f"Results saved to {output_squares} and {output_addresses}")
+    # Save enhanced addresses (excluding specified columns) only if addresses were extracted
+    if enhanced_addresses_results_dict:
+        save_all_to_geojson(
+            enhanced_addresses_results_dict,
+            base_path=output_addresses,
+            kind="addresses",
+            exclude_cols=exclude_columns,
+            selection_type=selection_type,
+            district_colors=district_colors
+        )
+        logging.info(f"Results saved to {output_squares} and {output_addresses}")
+    else:
+        logging.info(f"Squares saved to {output_squares} (addresses skipped)")
 
 
 
@@ -523,19 +547,60 @@ def main() -> int:
         # Integrate Wucher Miete detection
         rent_campaign_df = integrate_wucher_detection(rent_campaign_df, loading_dict)
         
-        # Filter by districts
-        results_dict = filter_by_districts(bezirke_dict, rent_campaign_df)
+        # Filter by districts and extract colors
+        results_dict, district_colors = filter_by_districts(bezirke_dict, rent_campaign_df)
         
         # Add metric cards to district results
         results_dict = add_metric_cards(results_dict, rent_campaign_df)
         
-        # Extract addresses
-        addresses_results_dict = extract_addresses(results_dict)
+        # Calculate population statistics for opacity scaling
+        population_stats = None
+        square_city_mapping = None
+        if OPACITY_SCALING_CONFIG.get("enabled", False):
+            krs_path = "data/cities/VG250_KRS.shp"
+            if Path(krs_path).exists():
+                logging.info(f"Loading city boundaries from {krs_path} for opacity scaling")
+                try:
+                    krs_gdf = gpd.read_file(krs_path)
+                    
+                    # Calculate population statistics per city
+                    population_stats = calculate_city_population_stats(
+                        rent_campaign_df, 
+                        krs_gdf,
+                        population_column=OPACITY_SCALING_CONFIG.get("population_column", "Einwohner"),
+                        use_robust_scaling=OPACITY_SCALING_CONFIG.get("use_robust_scaling", True),
+                        lower_percentile=OPACITY_SCALING_CONFIG.get("lower_percentile", 5),
+                        upper_percentile=OPACITY_SCALING_CONFIG.get("upper_percentile", 95)
+                    )
+                    
+                    # Map squares to cities
+                    square_city_mapping = map_squares_to_cities(results_dict, krs_gdf)
+                    
+                    logging.info(f"Opacity scaling enabled: {len(population_stats)} cities, {len(square_city_mapping)} districts mapped")
+                except Exception as e:
+                    logging.warning(f"Failed to calculate opacity scaling data: {e}. Using fallback opacity.")
+                    population_stats = None
+                    square_city_mapping = None
+            else:
+                logging.warning(f"City boundaries not found at {krs_path}. Opacity scaling disabled.")
+        else:
+            logging.info("Opacity scaling disabled in config")
         
-        # Save results
+        # Extract addresses (optional)
+        if args.skip_addresses:
+            logging.info("Skipping address extraction (--skip-addresses flag set)")
+            addresses_results_dict = {}
+        else:
+            addresses_results_dict = extract_addresses(results_dict)
+        
+        # Save results with opacity scaling
         save_results(
             results_dict, addresses_results_dict,
-            args.output_squares, args.output_addresses
+            args.output_squares, args.output_addresses,
+            selection_type=args.selection_type,
+            district_colors=district_colors,
+            population_stats=population_stats,
+            square_city_mapping=square_city_mapping
         )
         
         logging.info("Pipeline completed successfully")
